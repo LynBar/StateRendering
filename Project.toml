@@ -1,0 +1,16 @@
+name = "StateRendering"
+uuid = "7047d5b8-1539-4648-b8e1-db745c578ee0"
+version = "0.1.0"
+authors = ["Barry Lynch <lynchba@tcd.ie>"]
+
+[deps]
+GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
+HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
+LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+
+[compat]
+GLMakie = "0.13.11"
+HDF5 = "0.17.3"
+LaTeXStrings = "1.4.0"
+LinearAlgebra = "1.12.0"
