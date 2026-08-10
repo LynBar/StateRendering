@@ -3,21 +3,30 @@ module StateRendering
 using GLMakie, LaTeXStrings, LinearAlgebra
 using HDF5
 
-export PlotΨ, PlotH5, PlotElectron, PlotHole
+export PlotΨ, PlotH5, PlotElectron, PlotHole, PlotCIΨ
+
+# Pie-component decomposition for a given number of spinor bands. Returns
+# (labels, colors, groups) where each group lists the band indices summed into
+# one orbital component. Band orderings assumed:
+#   2 -> [s↑, s↓]
+#   6 -> [pₓ↑, p_y↑, p_z↑, pₓ↓, p_y↓, p_z↓]
+#   8 -> [s↑, pₓ↑, p_y↑, p_z↑, s↓, pₓ↓, p_y↓, p_z↓]
+function band_decomposition(nbands::Integer)
+    nbands == 2 && return ([L"s"], [:red], [[1, 2]])
+    nbands == 6 && return ([L"p_x", L"p_y", L"p_z"], [:blue, :green, :black], [[1, 4], [2, 5], [3, 6]])
+    nbands == 8 && return ([L"s", L"p_x", L"p_y", L"p_z"], [:red, :blue, :green, :black], [[i, i + 4] for i in 1:4])
+    error("No component decomposition defined for $nbands bands")
+end
 
 function PlotElectron(Ψes::AbstractVector{<:AbstractArray{Float64, 4}}; energies = nothing)
     band_labels = [L"s\uparrow", L"s\downarrow"]
-    comp_labels = [L"s"]
-    comp_colors = [:red]
-    comp_groups = [[1, 2]]
+    comp_labels, comp_colors, comp_groups = band_decomposition(2)
     return _plot_state(Ψes, band_labels, comp_labels, comp_colors, comp_groups; energies, state_prefix = "e")
 end
 
 function PlotHole(Ψhs::AbstractVector{<:AbstractArray{Float64, 4}}; energies = nothing)
     band_labels = [L"p_x\uparrow", L"p_y\uparrow", L"p_z\uparrow", L"p_x\downarrow", L"p_y\downarrow", L"p_z\downarrow"]
-    comp_labels = [L"p_x", L"p_y", L"p_z"]
-    comp_colors = [:blue, :green, :black]
-    comp_groups = [[1, 4], [2, 5], [3, 6]]
+    comp_labels, comp_colors, comp_groups = band_decomposition(6)
     return _plot_state(Ψhs, band_labels, comp_labels, comp_colors, comp_groups; energies, state_prefix = "h")
 end
 
@@ -282,16 +291,16 @@ function add_density!(ax, geom_gl, density_obs)
     volume!(ax, density_obs, algorithm = :iso, isovalue = iso_slider.value, isorange = 0.1, visible = cb.checked)
 end
 
-function add_components!(gl, components_obs, orbital_labels, orbital_colors)
+function add_components!(gl, components_obs, orbital_labels, orbital_colors; halign = 0.1, valign = :top, legend_halign = :left, legend_valign = :top, title = "Components", show_legend = true)
     ax_inset = Axis(gl[1, 1],
         width = Relative(0.2),
         height = Relative(0.2),
         aspect = 1,
-        halign = 0.1,
-        valign = :top,
+        halign = halign,
+        valign = valign,
         tellwidth = false,
         tellheight = false,
-        title = "Components",
+        title = title,
         backgroundcolor = :transparent)
     hidespines!(ax_inset)
     hidedecorations!(ax_inset)
@@ -305,12 +314,12 @@ function add_components!(gl, components_obs, orbital_labels, orbital_colors)
         strokewidth = 2,
         overdraw = true)
 
-    Legend(gl[1, 1],
+    show_legend && Legend(gl[1, 1],
         [MarkerElement(color = c, marker = :circle) for c in orbital_colors],
         orbital_labels,
         tellwidth = false,
-        halign = :left,
-        valign = :top)
+        halign = legend_halign,
+        valign = legend_valign)
 end
 
 function _plot_state(Ψs::AbstractVector{<:AbstractArray{Float64,4}}, band_labels, comp_labels, comp_colors, comp_groups; energies = nothing, state_prefix = "")
@@ -377,9 +386,7 @@ function PlotΨ(Ψs::AbstractVector{<:AbstractArray{Float64,4}}; geometry = noth
         L"s\uparrow", L"s\downarrow", L"p_x\uparrow", L"p_x\downarrow", L"p_y\uparrow", L"p_y\downarrow", L"p_z\uparrow", L"p_z\downarrow"
     ]
     permute!(band_labels, [1,3,5,7,2,4,6,8])
-    comp_groups = [[i, i+4] for i in 1:4]
-    comp_labels = [L"s", L"p_x", L"p_y", L"p_z"]
-    comp_colors = [:red, :blue, :green, :black]
+    comp_labels, comp_colors, comp_groups = band_decomposition(8)
 
     density_obs, components_obs = add_band_selector!(band_gl, Ψ_obs, band_labels, comp_groups)
 
@@ -426,4 +433,232 @@ function PlotH5(estruct::HDF5.File)
 
     PlotΨ(append!(Array.(Ψes), Array.(Ψhs)); geometry, piezo, polarization = (px, py, pz), ne, nh, energies = append!(el_energies, ho_energies), strain)
 end
+
+function add_ci_density!(ax, geom_gl, e_density_obs, h_density_obs)
+    e_cb = Checkbox(geom_gl[1, 1], checked = true)
+    Label(geom_gl[1, 2], "Electron", halign = :center)
+    h_cb = Checkbox(geom_gl[2, 1], checked = true)
+    Label(geom_gl[2, 2], "Hole", halign = :center)
+
+    iso_controls = GridLayout(geom_gl[3, 3])
+    iso_slider = Slider(iso_controls[1, 1], range = 0:0.01:1, startvalue = 0.7,
+        update_while_dragging = true, horizontal = true)
+    Label(iso_controls[1, 2], "iso", halign = :center)
+
+    volume!(ax, e_density_obs, algorithm = :iso, isovalue = iso_slider.value, isorange = 0.1,
+        visible = e_cb.checked, transparency = true, alpha = 0.5, colormap = [:dodgerblue])
+    volume!(ax, h_density_obs, algorithm = :iso, isovalue = iso_slider.value, isorange = 0.1,
+        visible = h_cb.checked, transparency = true, alpha = 0.5, colormap = [:crimson])
+end
+
+function PlotCIΨ(Ψe::AbstractVector{<:AbstractArray{Float64,4}}, Ψh::AbstractVector{<:AbstractArray{Float64,4}}, CIVecs::AbstractVector{<:AbstractVector{ComplexF64}}, CIEnergies::AbstractVector{Float64}; e_energies = nothing, h_energies = nothing, geometry = nothing, piezo = nothing, polarization = nothing, strain = nothing)
+    ne = length(Ψe)
+    nh = length(Ψh)
+    r = min(ne, nh)
+    CIVecs = reshape.(CIVecs, Ref((nh, ne)))
+    nstates = length(CIVecs)
+
+    # Natural orbital for a Schmidt pair: complex-weighted combination of the
+    # single-particle states, turned into a band-resolved density via |·|².
+    natural_orbital(Ψ, coeffs) = abs2.(sum(c .* ψ for (c, ψ) in zip(coeffs, Ψ)))
+    comp_values(ψ, groups) = begin
+        c = [sum(ψi) for ψi in eachslice(ψ, dims = 1)]
+        [sum(c[i] for i in g) for g in groups]
+    end
+
+    e_labels, e_colors, e_groups = band_decomposition(size(Ψe[1], 1))
+    h_labels, h_colors, h_groups = band_decomposition(size(Ψh[1], 1))
+
+    fig = Figure()
+
+    unicode_sub(i) = join(Char(0x2080 + d) for d in reverse(digits(i)))
+    state_labels = ["X$(unicode_sub(i)) -> $(round(CIEnergies[i]; digits = 4)) eV" for i in 1:nstates]
+
+    # Selection state kept independent of the (repurposed) menus below.
+    state_sel = Observable(1)   # which exciton (CI eigenstate)
+    pair_idx  = Observable(1)   # which Schmidt pair
+    e_idx     = Observable(1)   # which bare electron eigenstate
+    h_idx     = Observable(1)   # which bare hole eigenstate
+
+    C_obs = lift(s -> CIVecs[s], state_sel)
+    svd_obs = lift(svd, C_obs)
+    pair_labels = lift(svd_obs) do F
+        ["pair $k -> λ=$(round(abs2(F.S[k]); digits = 3))" for k in 1:r]
+    end
+
+    # Toggle between the correlated exciton picture (Schmidt natural orbitals)
+    # and the bare single-particle picture.  The two selector menus are
+    # repurposed rather than duplicated, so the exciton-specific menus are
+    # simply absent in single-particle mode.
+    mode_menu = Menu(fig, options = ["Exciton", "Single particle"], tellwidth = false)
+    sp_obs = lift(s -> s == "Single particle", mode_menu.selection)
+
+    sp_label(prefix, i, energies) = isnothing(energies) ? "$prefix$(i - 1)" :
+        "$prefix$(i - 1) -> $(round(energies[i]; digits = 4)) eV"
+
+    exc_optsA = collect(zip(state_labels, 1:nstates))
+    sp_optsA  = collect(zip([sp_label("e", i, e_energies) for i in 1:ne], 1:ne))
+    sp_optsB  = collect(zip([sp_label("h", i, h_energies) for i in 1:nh], 1:nh))
+
+    menuA = Menu(fig, options = exc_optsA, tellwidth = false)
+    menuB = Menu(fig, options = collect(zip(pair_labels[], 1:r)), tellwidth = false)
+
+    labelA = lift(sp -> sp ? "Electron" : "State", sp_obs)
+    labelB = lift(sp -> sp ? "Hole" : "Schmidt pair", sp_obs)
+
+    fig[1, 1] = hgrid!(
+        vgrid!(Label(fig, "Mode", width = nothing), mode_menu),
+        vgrid!(Label(fig, labelA, width = nothing), menuA),
+        vgrid!(Label(fig, labelB, width = nothing), menuB),
+    )
+
+    gl = GridLayout(fig[2, 1])
+    ax = Axis3(gl[1, 1])
+    hidedecorations!(ax)
+    right_gl = GridLayout(gl[1, 2])
+    comp_gl = GridLayout(right_gl[1, 1])
+    geom_gl = GridLayout(right_gl[2, 1], tellheight = false)
+    colsize!(gl, 1, Auto(1))
+
+    # Configuration-weight matrix |C_ij|² (hole index on x, electron index on y)
+    # for the selected CI state.  Square cells, integer ticks and a light-background
+    # colormap keep the (usually sparse) matrix readable; dominant cells are
+    # annotated with their weight.
+    # left-align the (square) heatmap and keep the colourbar snug against it
+    plot_gl = GridLayout(comp_gl[1, 1], halign = :left, tellwidth = true)
+    checker_ax = Axis(plot_gl[1, 1], title = "Configuration weights",
+        xlabel = "hole index", ylabel = "electron index",
+        aspect = DataAspect(),
+        xticks = 1:nh, yticks = 1:ne,
+        xgridvisible = false, ygridvisible = false,
+        xminorgridvisible = true, yminorgridvisible = true,
+        xminorticks = 0.5:1:(nh + 0.5), yminorticks = 0.5:1:(ne + 0.5),
+        xminorgridcolor = (:white, 0.6), yminorgridcolor = (:white, 0.6),
+        height = 200)
+    weight_obs = lift(C -> abs2.(C), C_obs)
+    crange_obs = lift(w -> (0.0, max(maximum(w), eps())), weight_obs)
+    hm = heatmap!(checker_ax, 1:nh, 1:ne, weight_obs,
+        colormap = :dense, colorrange = crange_obs)
+    Colorbar(plot_gl[1, 2], hm, label = L"|C_{ij}|^2")
+    colsize!(plot_gl, 1, Aspect(1, nh / ne))
+
+    # annotate the cells carrying meaningful weight (white text reads well on
+    # the dark, high-weight end of the colormap)
+    annot_obs = lift(weight_obs, crange_obs) do w, cr
+        pts = Point2f[]
+        strs = String[]
+        for I in CartesianIndices(w)
+            if w[I] > 0.05 * cr[2]
+                push!(pts, Point2f(I[1], I[2]))
+                push!(strs, string(round(w[I]; digits = 2)))
+            end
+        end
+        (pts, strs)
+    end
+    text!(checker_ax, lift(a -> a[1], annot_obs);
+        text = lift(a -> a[2], annot_obs),
+        align = (:center, :center), color = :white, fontsize = 11)
+
+    # Exciton mode: Schmidt natural orbitals of the selected pair.
+    # Single-particle mode: the bare electron/hole eigenstate densities.
+    e_no = lift(sp_obs, svd_obs, pair_idx, e_idx) do sp, F, k, ei
+        sp ? Ψe[ei] : natural_orbital(Ψe, F.V[:, k])
+    end
+    h_no = lift(sp_obs, svd_obs, pair_idx, h_idx) do sp, F, k, hi
+        sp ? Ψh[hi] : natural_orbital(Ψh, F.U[:, k])
+    end
+
+    e_density = lift(ψ -> ΨDensity(ψ, trues(size(ψ, 1))), e_no)
+    h_density = lift(ψ -> ΨDensity(ψ, trues(size(ψ, 1))), h_no)
+    e_comps = lift(ψ -> comp_values(ψ, e_groups), e_no)
+    h_comps = lift(ψ -> comp_values(ψ, h_groups), h_no)
+
+    add_ci_density!(ax, geom_gl, e_density, h_density)
+    add_components!(gl[1, 1], e_comps, e_labels, e_colors; halign = 0.02, valign = :top, title = "Electron", show_legend = false)
+    add_components!(gl[1, 1], h_comps, h_labels, h_colors; halign = 0.98, valign = :top, title = "Hole", show_legend = false)
+    # both pies share the orbital colour scheme, so a single legend suffices;
+    # place it at the top, between the two pie charts
+    Legend(gl[1, 1],
+        [MarkerElement(color = c, marker = :circle) for c in e_colors],
+        e_labels, "Orbital",
+        tellwidth = false, tellheight = false,
+        halign = :center, valign = :top, orientation = :horizontal)
+    !isnothing(geometry)     && add_geometry!(ax, geom_gl, geometry)
+    !isnothing(piezo)        && add_piezo!(ax, geom_gl, piezo)
+    !isnothing(polarization) && add_polarization!(ax, fig, geom_gl, polarization)
+    !isnothing(strain)       && add_strain!(ax, fig, geom_gl, strain)
+
+    # Menu A/B drive different observables depending on the mode.
+    on(menuA.selection) do v
+        isnothing(v) && return
+        sp_obs[] ? (e_idx[] = v) : (state_sel[] = v)
+    end
+    on(menuB.selection) do v
+        isnothing(v) && return
+        sp_obs[] ? (h_idx[] = v) : (pair_idx[] = v)
+    end
+
+    # Repopulate both menus on a mode switch, restoring each mode's last choice.
+    on(mode_menu.selection) do _
+        if sp_obs[]
+            menuA.options[] = sp_optsA
+            menuB.options[] = sp_optsB
+            menuA.i_selected[] = clamp(e_idx[], 1, ne)
+            menuB.i_selected[] = clamp(h_idx[], 1, nh)
+        else
+            menuA.options[] = exc_optsA
+            menuB.options[] = collect(zip(pair_labels[], 1:r))
+            menuA.i_selected[] = clamp(state_sel[], 1, nstates)
+            menuB.i_selected[] = clamp(pair_idx[], 1, r)
+        end
+    end
+
+    # Keep the Schmidt-pair labels in sync with the selected exciton
+    # (exciton mode only; leaves the hole menu untouched in SP mode).
+    on(pair_labels) do labels
+        sp_obs[] && return
+        keep = clamp(pair_idx[], 1, r)
+        menuB.options[] = collect(zip(labels, 1:r))
+        menuB.i_selected[] = keep
+    end
+
+    return fig
+end
+
+function PlotH5(estruct::HDF5.File, CI::HDF5.File)
+
+    read_transposed(path) = Array(estruct[path]) |> x -> real(permutedims(x, (3, 2, 1)))
+
+    geometry = read_transposed("geometry/composition")
+    piezo = read_transposed("piezo/potential")
+
+    el = Array(estruct["estruct/el_eigenvectors_5d"])
+    el_energies = Array(estruct["estruct/el_eigenvalues"])
+    el = permutedims(el, (1, 2, 5, 4, 3))
+    Ψes = eachslice(abs2.(el), dims = 1)
+    ne = size(Ψes, 1)
+
+    ho = Array(estruct["estruct/ho_eigenvectors_5d"])
+    ho_energies = Array(estruct["estruct/ho_eigenvalues"])
+    ho = permutedims(ho, (1, 2, 5, 4, 3))
+    Ψhs = eachslice(abs2.(ho), dims = 1)
+    nh = size(Ψhs, 1)
+
+    px = read_transposed("piezo/Px")
+    py = read_transposed("piezo/Py")
+    pz = read_transposed("piezo/Pz")
+
+    strain = [read_transposed("strain/e"*ij) for ij in ("XX", "XY", "XZ", "YY", "YZ", "ZZ")]
+
+    CIvecs = Array(CI["ci/exciton/eigenvectors"]) |> eachrow .|> collect
+    CIenergies = Array(CI["ci/exciton/eigenvalues"])
+
+    CIne, CInh = Array(CI["ci/exciton/basis_indices"]) |> Basis -> (Basis[1,end], Basis[2,end])
+
+    return PlotCIΨ(Array.(Ψes)[1:CIne], Array.(Ψhs)[1:CInh], CIvecs, CIenergies;
+        e_energies = el_energies[1:CIne], h_energies = ho_energies[1:CInh],
+        geometry, piezo, polarization = (px, py, pz), strain)
+end
+
 end # module StateRendering
+
