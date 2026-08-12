@@ -1,0 +1,10 @@
+[deps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+KPPhysics = "53abd71a-b2ec-4b37-a358-52d36603951b"
+MatrixFreeKPSolver = "8334ebc2-2992-4adc-bc42-4a35abba55fb"
+StateRendering = "7047d5b8-1539-4648-b8e1-db745c578ee0"
+
+[sources]
+KPPhysics = {path = "../../KPPhysics"}
+MatrixFreeKPSolver = {path = "../../MatrixFreeKPSolver"}
+StateRendering = {path = ".."}

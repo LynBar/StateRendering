@@ -1,3 +1,5 @@
 SYMMETRY_DECOMPOSITION_PLAN.md
-src/Basic.h5
-src/spectrum_results copy.h5
+
+# Local data files, moved out of src/ where they used to sit
+data/
+examples/figures/
