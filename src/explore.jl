@@ -13,11 +13,13 @@
 
 """
     explore(b::StateBundle; fields = ScalarField[], strain = nothing,
-            vectors = nothing, fraction = 0.5) -> Figure
+            vectors = nothing, labels = nothing, fraction = 0.5) -> Figure
 
 Interactive browser for a solved bundle:
 
-  * a state menu, labelled with energy and dominant orbital component;
+  * a state menu, labelled with energy and dominant orbital component — or with
+    `labels`, one string per state, when the band decomposition is not the
+    informative name (a point-group irrep usually is not);
   * one checkbox per spinor band, **named and coloured from the bundle**, so the
     density can be restricted to any subset of bands;
   * an isosurface slider in units of *enclosed probability*, not of peak height,
@@ -35,7 +37,7 @@ widgets do not respond.
 """
 function explore(b::StateBundle;
                  fields = ScalarField[], strain = nothing, vectors = nothing,
-                 fraction::Real = 0.5, size = (1180, 730))
+                 labels = nothing, fraction::Real = 0.5, size = (1180, 730))
     _warn_static_backend()
 
     overlays = ScalarField[fields...]
@@ -48,9 +50,13 @@ function explore(b::StateBundle;
     fig = Figure(size = size)
 
     # ── state selection ────────────────────────────────────────────────────
+    labels === nothing || length(labels) == length(b) || throw(DimensionMismatch(
+        "got $(length(labels)) labels for $(length(b)) states"))
     state_labels = [@sprintf("%s%d   %.4f eV   %s",
                              b.kind[i] === :hole ? "h" : "e", i, b.energies[i],
-                             dominant_component(b, i)[1]) for i in 1:length(b)]
+                             labels === nothing ? dominant_component(b, i)[1] :
+                                                  String(labels[i]))
+                    for i in 1:length(b)]
     menu = Menu(fig, options = zip(state_labels, 1:length(b)), tellwidth = false)
     fig[1, 1] = hgrid!(Label(fig, "State", width = nothing), menu)
 

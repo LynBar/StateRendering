@@ -1,5 +1,9 @@
 SYMMETRY_DECOMPOSITION_PLAN.md
 
+# Library Manifest — see the note in MatrixFreeKPSolver/.gitignore. The leading
+# slash matters: examples/Manifest.toml stays tracked so the example reproduces.
+/Manifest.toml
+
 # Local data files, moved out of src/ where they used to sit
 data/
 examples/figures/

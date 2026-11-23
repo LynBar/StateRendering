@@ -100,3 +100,59 @@ kind_color(kind::Symbol) = kind === :hole ? RGBf(0.86, 0.20, 0.27) :
 diverging_map(alpha::Real) = [RGBAf(0.0, 0.3, 1.0, alpha),
                               RGBAf(0.0, 0.0, 0.0, 0.0),
                               RGBAf(1.0, 0.2, 0.0, alpha)]
+
+# ── irreps ─────────────────────────────────────────────────────────────────
+# One colour per irrep per group, in every figure (the labelling figures, the
+# exciton spectrum, the CI and phonon figures). A colour is the irrep's SLOT, its
+# position in the group's own table, counted separately among the single-valued
+# and the double-valued irreps: a figure shows one kind or the other (spinor
+# states, or excitons and fields), so the two sets never compete, and the first
+# irreps of either take the most separable colours. The slot order is a fixed,
+# colourblind-checked categorical order; "?" is always grey.
+
+const _IRREP_SLOTS = RGBf[
+    RGBf(0x2a / 255, 0x78 / 255, 0xd6 / 255),   # blue
+    RGBf(0xeb / 255, 0x68 / 255, 0x34 / 255),   # orange
+    RGBf(0x1b / 255, 0xaf / 255, 0x7a / 255),   # aqua
+    RGBf(0xed / 255, 0xa1 / 255, 0x00 / 255),   # yellow
+    RGBf(0xe8 / 255, 0x7b / 255, 0xa4 / 255),   # magenta
+    RGBf(0x00 / 255, 0x83 / 255, 0x00 / 255),   # green
+    RGBf(0x62 / 255, 0x50 / 255, 0xd6 / 255),   # violet
+    RGBf(0xe3 / 255, 0x49 / 255, 0x48 / 255),   # red
+]
+
+"Grey: an unlabelled (`\"?\"`) or unknown irrep, in every figure."
+const UNLABELLED_COLOR = RGBf(0.62, 0.62, 0.60)
+
+"Red outline: a declared label the measurement disagrees with."
+const DISAGREE_COLOR = RGBf(0xd0 / 255, 0x3b / 255, 0x3b / 255)
+
+"""
+    irrep_color(label, irreps, double = falses(length(irreps))) -> RGBf
+    irrep_palette(irreps, double = falses(length(irreps))) -> Dict{String,RGBf}
+
+The colour of irrep `label` in a group whose table lists `irreps` (with `double`
+marking the double-valued ones): its slot among the irreps of the same kind, so
+the same irrep has the same colour in every figure of that group. `"?"`, `""` and
+labels not in the table are [`UNLABELLED_COLOR`](@ref). A combined label such as
+`"Γ8+Γ9"` takes its first irrep's colour.
+
+Groups with more than eight irreps of one kind (Oh) reuse slots from the ninth on;
+the legends name every irrep, so identity never rests on colour alone.
+"""
+function irrep_color(label::AbstractString, irreps::AbstractVector,
+                     double::AbstractVector = falses(length(irreps)))
+    l = String(label)
+    k = findfirst(==(l), irreps)
+    if k === nothing
+        parts = split(l, r"[+⊕ ]"; keepempty = false)
+        isempty(parts) && return UNLABELLED_COLOR
+        k = findfirst(==(first(parts)), irreps)
+        k === nothing && return UNLABELLED_COLOR
+    end
+    slot = count(j -> double[j] == double[k], 1:k)
+    return _IRREP_SLOTS[mod1(slot, length(_IRREP_SLOTS))]
+end
+
+irrep_palette(irreps::AbstractVector, double::AbstractVector = falses(length(irreps))) =
+    Dict{String,RGBf}(String(l) => irrep_color(l, irreps, double) for l in irreps)

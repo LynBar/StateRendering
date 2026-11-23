@@ -42,6 +42,17 @@ axis you own, for figures that are not in the list above.
 
 With `HDF5` loaded, `load_h5` reads a state file written by another solver into a
 bundle; see its docstring for the band-basis argument it requires.
+
+With `CICalc` loaded, [`plot_exciton`](@ref), [`plot_exciton_spectrum`](@ref) and
+[`plot_configurations`](@ref) draw an `ExcitonBundle`. Point-group labels reach
+the single-particle figures without any of that: every figure here takes a
+`labels` keyword, and `CICalc.state_labels(ks)` supplies one.
+
+The labelling figures draw a `CICalc.LevelBundle` (`level_bundle(ks, analysis)`):
+[`plot_levels`](@ref), [`plot_irrep_weights`](@ref), [`plot_operation_map`](@ref),
+[`plot_symmetry_quality`](@ref), [`plot_charges`](@ref), [`plot_parent_mixing`](@ref),
+[`plot_field_irreps`](@ref) and [`plot_sweep`](@ref) (a `SymmetrySweep`). Each
+irrep has one colour in every figure ([`irrep_color`](@ref)), and "?" is grey.
 """
 module StateRendering
 
@@ -69,6 +80,7 @@ export isolevel, enclosed_fraction, isosurface_mesh, centroid, smooth
 
 # ── colours, keyed by band label ──────────────────────────────────────────
 export component_color, component_palette, band_palette, kind_color
+export irrep_color, irrep_palette, UNLABELLED_COLOR, DISAGREE_COLOR
 
 # ── primitives: draw one thing into an axis you own ───────────────────────
 export state_axis3, add_density!, add_geometry!, add_scalar!, add_vectors!
@@ -82,5 +94,29 @@ export explore
 # defined by the HDF5 extension
 function load_h5 end
 export load_h5
+
+# ── exciton figures, defined by the CICalc extension ──────────────────────
+# An exciton is a function of two positions, so these work off the REDUCED
+# one-body densities in an `ExcitonBundle` rather than off anything that could
+# be called |X(r)|². Load CICalc to get them.
+function plot_exciton_spectrum end
+function plot_exciton end
+function plot_configurations end
+export plot_exciton_spectrum, plot_exciton, plot_configurations
+
+# ── labelling figures (SYMMETRY L6), defined by the CICalc extension ──────
+# All draw a `CICalc.LevelBundle` (`level_bundle(ks, analysis; …)`), except
+# `plot_sweep`, which draws a `SymmetrySweep`, and `plot_field_irreps`, which also
+# takes `field_content` results. Each keeps its layout on an unlabelled bundle.
+function plot_levels end
+function plot_irrep_weights end
+function plot_operation_map end
+function plot_symmetry_quality end
+function plot_charges end
+function plot_parent_mixing end
+function plot_field_irreps end
+function plot_sweep end
+export plot_levels, plot_irrep_weights, plot_operation_map, plot_symmetry_quality,
+       plot_charges, plot_parent_mixing, plot_field_irreps, plot_sweep
 
 end # module StateRendering

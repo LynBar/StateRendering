@@ -257,23 +257,36 @@ function add_component_bars!(ax, b::StateBundle, i::Integer;
 end
 
 """
-    add_levels!(ax, b; x = 0, width = 0.8, label = true)
+    add_levels!(ax, b; x = 0, width = 0.8, label = true, labels = nothing)
 
 Energy levels of the bundle as horizontal ticks, coloured by dominant component.
 Degenerate levels are drawn on top of each other, which is the point: a Kramers
 pair looks like one line, and a split one does not.
+
+`labels` replaces the default `"HH 92%"` annotation with one string per state.
+Pass it whenever the band decomposition is not the informative label — a
+point-group irrep usually is not, and for a dot quantised along an axis other
+than the basis frame the band weights are actively misleading (a [111] dot's
+ground hole doublet reads HH:0.11/LH:0.19/LH:0.31/HH:0.39, which says nothing).
+An empty string suppresses one level's text.
 """
 function add_levels!(ax, b::StateBundle; x::Real = 0, width::Real = 0.8,
-                     label::Bool = true, fontsize = 10, kwargs...)
+                     label::Bool = true, labels = nothing, fontsize = 10,
+                     kwargs...)
     cols = component_palette(b.component_labels)
+    labels === nothing || length(labels) == length(b) || throw(DimensionMismatch(
+        "got $(length(labels)) labels for $(length(b)) states"))
     for i in 1:length(b)
         lbl, w = dominant_component(b, i)
         c = cols[findfirst(==(lbl), b.component_labels)]
         lines!(ax, [x - width/2, x + width/2], fill(b.energies[i], 2);
                color = c, linewidth = 2.5, kwargs...)
-        label && text!(ax, x + width/2 + 0.05, b.energies[i];
-                       text = @sprintf("%s %.0f%%", lbl, 100w),
-                       align = (:left, :center), fontsize = fontsize, color = c)
+        txt = labels === nothing ? @sprintf("%s %.0f%%", lbl, 100w) :
+                                   String(labels[i])
+        label && !isempty(txt) &&
+            text!(ax, x + width/2 + 0.05, b.energies[i];
+                  text = txt, align = (:left, :center),
+                  fontsize = fontsize, color = c)
     end
     ax.ylabel = "E (eV)"
     hidexdecorations!(ax)

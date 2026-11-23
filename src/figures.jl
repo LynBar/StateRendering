@@ -163,16 +163,22 @@ evolves up the ladder. A conduction ladder should stay flat and S-dominated; a
 valence ladder that flips from HH to LH partway up is telling you something
 about the confinement.
 """
-function plot_composition(b::StateBundle; states = 1:length(b),
+function plot_composition(b::StateBundle; states = 1:length(b), labels = nothing,
                           size = (740, 380), title = "band character")
     idx = collect(states)
     cols = component_palette(b.component_labels)
     nc = length(b.component_labels)
+    labels === nothing || length(labels) == length(b) || throw(DimensionMismatch(
+        "got $(length(labels)) labels for $(length(b)) states"))
+
+    ticks = labels === nothing ?
+        [@sprintf("%s%d", b.kind[i] === :hole ? "h" : "e", i) for i in idx] :
+        [@sprintf("%s%d
+%s", b.kind[i] === :hole ? "h" : "e", i, labels[i]) for i in idx]
 
     fig = Figure(size = size)
     ax = Axis(fig[1, 1]; title = title, xlabel = "state", ylabel = "weight",
-              xticks = (1:length(idx),
-                        [@sprintf("%s%d", b.kind[i] === :hole ? "h" : "e", i) for i in idx]))
+              xticks = (1:length(idx), ticks))
     xs = Int[]; ys = Float64[]; grp = Int[]
     for (n, i) in pairs(idx)
         w = component_weights(b, i)
@@ -188,13 +194,20 @@ function plot_composition(b::StateBundle; states = 1:length(b),
 end
 
 """
-    plot_spectrum(b; ...) -> Figure
+    plot_spectrum(b; labels = nothing, ...) -> Figure
 
 Level diagram, each level coloured and annotated by its dominant component.
 Electrons and holes get their own panel when both are present — they are ~1 eV
 apart, and a shared axis would compress each ladder to a smudge.
+
+`labels` (one string per state of `b`, in `b`'s own order) replaces the
+annotation — point-group irreps, say. It is sliced per panel alongside the
+states, so the caller never has to know how the panels split.
 """
-function plot_spectrum(b::StateBundle; size = (520, 480), title = "spectrum")
+function plot_spectrum(b::StateBundle; labels = nothing, size = (520, 480),
+                       title = "spectrum")
+    labels === nothing || length(labels) == length(b) || throw(DimensionMismatch(
+        "got $(length(labels)) labels for $(length(b)) states"))
     kinds = unique(b.kind)
     fig = Figure(size = size)
     Label(fig[0, 1:max(length(kinds), 1)], title; fontsize = 15)
@@ -203,7 +216,7 @@ function plot_spectrum(b::StateBundle; size = (520, 480), title = "spectrum")
         ax = Axis(fig[1, n]; title = k === :hole ? "holes" : "electrons",
                   ylabel = "E (eV)")
         sub = _subset(b, sel)
-        add_levels!(ax, sub)
+        add_levels!(ax, sub; labels = labels === nothing ? nothing : labels[sel])
         xlims!(ax, -0.6, 1.4)
     end
     return fig

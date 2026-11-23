@@ -6,17 +6,16 @@
 # CI, over ssh. Swap in GLMakie and uncomment the last line for the interactive
 # browser.
 
-using CairoMakie
+using GLMakie
 using MatrixFreeKPSolver
 using StateRendering
 
-CairoMakie.activate!(type = "png")
 outdir = joinpath(@__DIR__, "figures")
 mkpath(outdir)
 
 # ── the model ──────────────────────────────────────────────────────────────
 
-grid = Grid((32, 32, 32), (24.0, 24.0, 24.0), Dirichlet())     # nm
+grid = Grid((32,32,32), (24.0, 24.0, 24.0), Dirichlet())     # nm
 geom = LensDot((12.0, 12.0, 10.0), 7.0, 4.0)                   # base radius, height
 δ    = 1.5 * minimum(grid.dx)                                  # smooth interface
 
@@ -74,4 +73,4 @@ save(joinpath(outdir, "spectrum.png"), plot_spectrum(both))
 #
 # With strain and polarisation from an elasticity solve or a file:
 #
-# explore(both; strain = ε, vectors = P)
+explore(both)

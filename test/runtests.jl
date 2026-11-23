@@ -264,5 +264,7 @@ end
 end
 
 include("test_hdf5.jl")     # the loader for files from another solver
+include("test_exciton_plots.jl")   # the CICalc extension and the labels channel
+include("test_level_plots.jl")     # the labelling figures (CICalc SYMMETRY L6)
 
 end # StateRendering
