@@ -43,10 +43,11 @@ axis you own, for figures that are not in the list above.
 With `HDF5` loaded, `load_h5` reads a state file written by another solver into a
 bundle; see its docstring for the band-basis argument it requires.
 
-With `CICalc` loaded, [`plot_exciton`](@ref), [`plot_exciton_spectrum`](@ref) and
-[`plot_configurations`](@ref) draw an `ExcitonBundle`. Point-group labels reach
-the single-particle figures without any of that: every figure here takes a
-`labels` keyword, and `CICalc.state_labels(ks)` supplies one.
+With `CICalc` loaded, a results archive (`CICalc.CICalcResults`, from
+`load_results` or a run spec) is drawn by [`save_figures`](@ref) (everything it
+supports), [`plot_sector`](@ref), [`plot_cascade`](@ref), and per state by
+[`plot_densities`](@ref), [`plot_configurations`](@ref) and [`plot_orbital`](@ref).
+Point-group labels reach the single-particle figures through their `labels` keyword.
 
 The labelling figures draw a `CICalc.LevelBundle` (`level_bundle(ks, analysis)`):
 [`plot_levels`](@ref), [`plot_irrep_weights`](@ref), [`plot_operation_map`](@ref),
@@ -95,14 +96,14 @@ export explore
 function load_h5 end
 export load_h5
 
-# ── exciton figures, defined by the CICalc extension ──────────────────────
-# An exciton is a function of two positions, so these work off the REDUCED
-# one-body densities in an `ExcitonBundle` rather than off anything that could
+# ── one state of a CICalc results archive, defined by the CICalc extension ──
+# A many-body state is a function of several positions, so its figure works off
+# the REDUCED one-body densities the archive stores, not off anything that could
 # be called |X(r)|². Load CICalc to get them.
-function plot_exciton_spectrum end
-function plot_exciton end
+function plot_densities end
 function plot_configurations end
-export plot_exciton_spectrum, plot_exciton, plot_configurations
+function plot_orbital end
+export plot_densities, plot_configurations, plot_orbital
 
 # ── labelling figures (SYMMETRY L6), defined by the CICalc extension ──────
 # All draw a `CICalc.LevelBundle` (`level_bundle(ks, analysis; …)`), except
@@ -118,5 +119,15 @@ function plot_field_irreps end
 function plot_sweep end
 export plot_levels, plot_irrep_weights, plot_operation_map, plot_symmetry_quality,
        plot_charges, plot_parent_mixing, plot_field_irreps, plot_sweep
+
+# the radiative cascade (`CICalc.cascade_bundle`), defined by the CICalc extension
+function plot_cascade end
+export plot_cascade
+
+# figures from a CICalc results archive (`CICalc.CICalcResults`): one sector's levels,
+# and every figure the archive supports; defined by the CICalc extension
+function plot_sector end
+function save_figures end
+export plot_sector, save_figures
 
 end # module StateRendering

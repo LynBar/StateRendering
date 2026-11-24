@@ -264,7 +264,9 @@ end
 end
 
 include("test_hdf5.jl")     # the loader for files from another solver
-include("test_exciton_plots.jl")   # the CICalc extension and the labels channel
+include("test_labels_channel.jl")  # the labels keyword of the single-particle figures
 include("test_level_plots.jl")     # the labelling figures (CICalc SYMMETRY L6)
+include("test_cascade_plot.jl")    # the radiative cascade XX → X → 0
+include("test_archive_figures.jl") # figures from a CICalc results archive
 
 end # StateRendering
