@@ -1,5 +1,5 @@
 #=
-The labelling figures (CICalc SYMMETRY L6), drawn from a real analysis of
+The labelling figures, drawn from a real analysis of
 synthetic C4v states (CICalc's own test generator, through the sibling layout
 that [sources] already assumes), broken by a B1 shape, against the symmetric
 reference. Each figure must build labelled, and keep its layout unlabelled.

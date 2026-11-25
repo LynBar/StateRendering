@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# Figures from a results archive (CICalc RESULTS_PIPELINE_PLAN, phase 2a).
+# Figures from a results archive.
 #
 # The presentation stage: everything here reads a `CICalc.CICalcResults`, whether it
 # was built in memory or loaded with `load_results`, and draws from what it stores.

@@ -105,7 +105,7 @@ function plot_configurations end
 function plot_orbital end
 export plot_densities, plot_configurations, plot_orbital
 
-# ── labelling figures (SYMMETRY L6), defined by the CICalc extension ──────
+# ── labelling figures, defined by the CICalc extension ──────
 # All draw a `CICalc.LevelBundle` (`level_bundle(ks, analysis; …)`), except
 # `plot_sweep`, which draws a `SymmetrySweep`, and `plot_field_irreps`, which also
 # takes `field_content` results. Each keeps its layout on an unlabelled bundle.

@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# The labelling figures (CICalc SYMMETRY_DECOMPOSITION_PLAN L6).
+# The labelling figures.
 #
 # Every figure but `plot_sweep` draws a `LevelBundle` (`level_bundle(ks, a; …)`),
 # plain arrays flattened out of a `SymmetryAnalysis`. Each also draws an

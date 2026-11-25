@@ -1,5 +1,5 @@
 #=
-Figures from a CICalc results archive (CICalc RESULTS_PIPELINE_PLAN 2a): built on
+Figures from a CICalc results archive: built on
 synthetic C3v [111] states, saved, reloaded, and drawn with `save_figures`; a missing
 product is refused with the product to add.
 =#
