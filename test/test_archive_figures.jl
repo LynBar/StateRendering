@@ -45,19 +45,32 @@ end
     res = load_results(p)
     out = joinpath(dir, "figs")
     paths = save_figures(res; out, verbose = false)
-    names = Set(splitext(basename(q))[1] for q in paths)
-    @test issubset(["levels", "operation_map", "quality", "sector_X", "sector_XX", "sector_0",
-                    "cascade_XX_X_0"], names)
+    # one folder per kind of figure
+    names = Set(first(splitext(replace(relpath(q, out), '\\' => '/'))) for q in paths)
+    @test issubset(["labels/levels", "labels/operation_map", "labels/quality",
+                    "sectors/X/levels", "sectors/XX/levels", "sectors/0/levels",
+                    "sectors/XX/configurations_1", "sectors/XX/configurations_1_species",
+                    "sectors/X/densities_1",
+                    "orbitals/orbital_1", "cascades/XX_X_0"], names)
     @test all(q -> filesize(q) > 5_000, paths)
     # the archive methods pick the bundle; a sector's levels with and without stored rates
     @test plot_cascade(res) isa Figure && plot_levels(res) isa Figure
     @test plot_sector(res, "X") isa Figure && plot_sector(res, "XX"; nlevels = 40) isa Figure
     @test plot_sector(res, "0") isa Figure
+    @test plot_sector(res, "X"; by_irrep = false) isa Figure            # one column
     # one state: densities, configurations (exciton heatmap, XX bar chart), orbitals
     @test plot_densities(res, "X", 1) isa Figure
     @test plot_densities(res, "XX", 1; geometry = false) isa Figure
     @test plot_configurations(res, "X", 2) isa Figure
-    @test plot_configurations(res, "XX", 1; top = 5) isa Figure
+    # a biexciton in terms of excitons (the archive holds X with its vectors), or by
+    # determinants on request
+    @test plot_configurations(res, "XX", 1) isa Figure
+    @test plot_configurations(res, "XX", 1; basis = :determinants, top = 5) isa Figure
+    @test plot_configurations(res, "XX", 1; basis = :species) isa Figure   # e pair ⊗ h pair
+    @test_throws ArgumentError plot_configurations(res, "0", 1; basis = :species)
+    noX = archive(); delete!(noX.sectors, "X")
+    @test plot_configurations(noX, "XX", 1) isa Figure                  # falls back
+    @test_throws ArgumentError plot_configurations(noX, "XX", 1; basis = :excitons)
     @test plot_orbital(res, 1) isa Figure && plot_orbital(res, 3; bands = false) isa Figure
     msg(f) = try f(); "" catch e; sprint(showerror, e) end
     @test occursin("densities:", msg(() -> plot_densities(res, "X", 3)))

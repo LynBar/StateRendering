@@ -21,7 +21,8 @@ using Makie
 using Makie: latexstring
 using Printf
 using CICalc: LevelBundle, SymmetrySweep, CascadeBundle, line_yield,
-              CICalcResults, StoredSector, HeavyRef
+              CICalcResults, StoredSector, HeavyRef, SectorSolution,
+              exciton_pair_weights, species_weights, _config_name
 using CICalc.Symmetry: labelled
 using StateRendering: isolevel, isosurface_mesh, smooth, state_axis3, kind_color,
                       irrep_color, component_color, component_palette,
