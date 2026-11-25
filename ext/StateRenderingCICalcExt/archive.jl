@@ -171,7 +171,9 @@ function save_figures(res::CICalcResults; out::AbstractString = "figures",
         one("levels", () -> plot_levels(lb))
         one("weights_state", () -> plot_irrep_weights(lb))
         one("weights_level", () -> plot_irrep_weights(lb; per = :level))
-        one("operation_map", () -> plot_operation_map(lb))
+        # broken = above ten times the worst method floor, when the floor was computed
+        fl = filter(isfinite, lb.floor)
+        one("operation_map", () -> plot_operation_map(lb; tol = max(1e-6, 10 * maximum(fl; init = 0.0))))
         one("quality", () -> plot_symmetry_quality(lb))
         one("charges", () -> plot_charges(lb))
         isempty(lb.fields) || one("fields", () -> plot_field_irreps(lb))
