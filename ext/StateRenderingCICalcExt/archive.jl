@@ -13,6 +13,17 @@
 
 _missing_product(what, how) = throw(ArgumentError("this archive has no $what. $how"))
 
+# A figure of one panel: `draw(fig[1, 1])` returns the panel, whose `size` the figure
+# takes unless `size` is given. Every `plot_*` of the archive is this around a `draw_*!`,
+# so a figure and the explorer's panel are drawn by the same code.
+function _single(draw, size)
+    fig = Figure()
+    p = draw(fig[1, 1])
+    w, h = something(size, p.size)
+    resize!(fig, round(Int, w), round(Int, h))
+    return fig
+end
+
 function _archive_levels(res::CICalcResults)
     res.levels === nothing && _missing_product("states block",
         "Store the states (`store!(res, ks, analysis)`); every run spec does.")
@@ -43,9 +54,12 @@ The stored cascade `name` (the only one when `nothing`), drawn by
 `plot_cascade(::CascadeBundle)`.
 """
 plot_cascade(res::CICalcResults, name = nothing; kwargs...) =
-    plot_cascade(_pick(res.cascades, name, "cascade",
-                       "Add `cascade:` to the run spec's `compute` (or store a " *
-                       "`cascade_bundle`)."); kwargs...)
+    plot_cascade(_stored_cascade(res, name); kwargs...)
+draw_cascade!(pos, res::CICalcResults, name = nothing; kwargs...) =
+    draw_cascade!(pos, _stored_cascade(res, name); kwargs...)
+_stored_cascade(res, name) =
+    _pick(res.cascades, name, "cascade",
+          "Add `cascade:` to the run spec's `compute` (or store a `cascade_bundle`).")
 
 # the stored rates out of a sector, if any: initial = this sector, final one pair lower
 function _rates_from(res::CICalcResults, s::StoredSector)
@@ -56,28 +70,11 @@ function _rates_from(res::CICalcResults, s::StoredSector)
     return nothing
 end
 
-"""
-    plot_sector(res::CICalcResults, name; nlevels = 24, by_irrep = true, size, title)
-        -> Figure
-
-The lowest `nlevels` levels of a stored sector.
-
-With `by_irrep` (the default) the spectrum has one column per irrep, in character-table
-order, with "?" last. Each state goes in the column of its own irrep
-(`state_labels`), so a level that the energy tolerance merged, such as `Γ5 ⊕ Γ6 ×4`,
-shows as its `Γ5 ×2` and `Γ6 ×2` side by side, each with its own energy and lifetime.
-`by_irrep = false` draws every level in one column, labelled by its content.
-
-When the archive holds rates out of this sector (e.g. "X→0" for X), each line shows
-its radiative lifetime, and its width and colour show its brightness and axial share.
-Lines beyond the stored rates (states whose vectors were not kept) are dashed. A line
-whose states differ in brightness shows the range of their lifetimes and is drawn by
-its brightest state.
-"""
-function plot_sector(res::CICalcResults, name::AbstractString; nlevels::Integer = 24,
-                     by_irrep::Bool = true, size = nothing, title = nothing)
-    s = _pick(res.sectors, String(name), "sector",
-              "Add it to the run spec's `compute: sectors:`.")
+# The lines of a sector's spectrum, `(label, states)` each: one per level, or with
+# `by_irrep` one per irrep within a level (each state in its own irrep's line), and
+# what is drawn of them. The explorer's nodes are these lines.
+function _sector_lines(res::CICalcResults, s::StoredSector; nlevels::Integer = 24,
+                       by_irrep::Bool = true)
     r = _rates_from(res, s)
     irreps = res.orbitals === nothing || !haskey(res.orbitals, :table) ? String[] :
              collect(String, res.orbitals.table.labels)
@@ -116,15 +113,53 @@ function plot_sector(res::CICalcResults, name::AbstractString; nlevels::Integer 
     rank(lab) = lab == "?" ? (3, 0) :
                 (k = findfirst(==(lab), irreps); k === nothing ? (2, findfirst(==(lab), labs)) : (1, k))
     cols = by_irrep ? sort(labs; by = rank) : ["all"]
-    col(lab) = by_irrep ? findfirst(==(lab), cols) : 1
     nc = length(cols)
+    return (; r, irreps, L, E0, lines_, srates, bright, ax_share, top, y, cols, nc)
+end
+
+"""
+    plot_sector(res::CICalcResults, name; nlevels = 24, by_irrep = true, size, title)
+        -> Figure
+
+The lowest `nlevels` levels of a stored sector.
+
+With `by_irrep` (the default) the spectrum has one column per irrep, in character-table
+order, with "?" last. Each state goes in the column of its own irrep
+(`state_labels`), so a level that the energy tolerance merged, such as `Γ5 ⊕ Γ6 ×4`,
+shows as its `Γ5 ×2` and `Γ6 ×2` side by side, each with its own energy and lifetime.
+`by_irrep = false` draws every level in one column, labelled by its content.
+
+When the archive holds rates out of this sector (e.g. "X→0" for X), each line shows
+its radiative lifetime, and its width and colour show its brightness and axial share.
+Lines beyond the stored rates (states whose vectors were not kept) are dashed. A line
+whose states differ in brightness shows the range of their lifetimes and is drawn by
+its brightest state.
+"""
+plot_sector(res::CICalcResults, name::AbstractString; size = nothing, kwargs...) =
+    _single(pos -> draw_sector!(pos, res, name; kwargs...), size)
+
+"""
+    draw_sector!(pos, res::CICalcResults, name; nlevels = 24, by_irrep = true, title)
+        -> (; layout, axis, size, lines)
+
+[`plot_sector`](@ref) drawn into a grid position `pos` (`fig[1, 1]`, a cell of a larger
+layout). `size` is the size the panel would like as a figure of its own; `lines` are
+the drawn lines, `(label, states)` each.
+"""
+function draw_sector!(pos, res::CICalcResults, name::AbstractString; nlevels::Integer = 24,
+                      by_irrep::Bool = true, title = nothing)
+    s = _pick(res.sectors, String(name), "sector",
+              "Add it to the run spec's `compute: sectors:`.")
+    d = _sector_lines(res, s; nlevels, by_irrep)
+    (; r, irreps, L, E0, lines_, srates, bright, ax_share, top, y, cols, nc) = d
+    col(lab) = by_irrep ? findfirst(==(lab), cols) : 1
     W = by_irrep ? 1.0 : 2.4                       # column width, in axis units
 
-    fig = Figure(size = something(size, by_irrep ? (150 + 300nc, 680) : (640, 620)))
+    gl = GridLayout(pos)
     ttl = title === nothing ?
         @sprintf("%s %s: lowest %d of %d levels%s", s.name, string(s.sector), length(L),
                  length(s.levels), by_irrep ? ", by irrep" : "") : title
-    ax = Axis(fig[1, 1]; title = ttl, ylabel = "E − E₁ (meV)", xgridvisible = false,
+    ax = Axis(gl[1, 1]; title = ttl, ylabel = "E − E₁ (meV)", xgridvisible = false,
               ygridcolor = _GRID)
     if by_irrep
         ax.xticks = ((0:nc-1) .* W .+ 0.11, cols)
@@ -173,12 +208,13 @@ function plot_sector(res::CICalcResults, name::AbstractString; nlevels::Integer 
     end
     xlims!(ax, -0.12, nc * W - 0.06)
     if r !== nothing && top > 0
-        Colorbar(fig[1, 2]; colormap = _POL_GRAD, limits = (0, 1), width = 10,
+        Colorbar(gl[1, 2]; colormap = _POL_GRAD, limits = (0, 1), width = 10,
                  label = "axial share of the emission (" * r.polnames[3] * ")")
-        Label(fig[2, 1:2], @sprintf("width: radiative rate to %s on a log scale (1e-6 of the brightest and below is thinnest); dashed: no stored rate",
+        Label(gl[2, 1:2], @sprintf("width: radiative rate to %s on a log scale (1e-6 of the brightest and below is thinnest); dashed: no stored rate",
                                      string(r.final)); fontsize = 9, color = _MUTED, tellwidth = false)
     end
-    return fig
+    return (; layout = gl, axis = ax, size = by_irrep ? (150 + 300nc, 680) : (640, 620),
+            lines = lines_)
 end
 
 # a file or folder name: letters, digits and _ . - + kept ("X+", "XX→X→0" → "XX_X_0")

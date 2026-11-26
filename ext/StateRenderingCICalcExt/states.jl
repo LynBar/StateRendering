@@ -18,11 +18,11 @@ const _CONFIG_CMAP = cgrad([RGBf(0.97, 0.98, 0.995), RGBf(0xcd / 255, 0xe2 / 255
                             RGBf(0x86 / 255, 0xb6 / 255, 0xef / 255), RGBf(0x39 / 255, 0x87 / 255, 0xe5 / 255),
                             RGBf(0x1c / 255, 0x5c / 255, 0xab / 255), RGBf(0x0d / 255, 0x36 / 255, 0x6b / 255)])
 
-# a 3-D figure's title: as a Label above the axis, which an Axis3 with no protrusions
-# would clip
-function _axis3_titled(fig, ttl)
-    Label(fig[0, 1], ttl; fontsize = 15, font = :bold, tellwidth = false)
-    return state_axis3(fig[1, 1])
+# a 3-D panel: its title as a Label above the axis (an Axis3 with no protrusions would
+# clip its own), the axis below it, row 3 left for a legend
+function _axis3_titled(gl, ttl)
+    Label(gl[1, 1], ttl; fontsize = 15, font = :bold, tellwidth = false)
+    return state_axis3(gl[2, 1])
 end
 
 function _sector_state(res::CICalcResults, name, i::Integer)
@@ -69,9 +69,17 @@ state's static dipole. The densities are a heavy product: list the state in the
 sector's `densities:` in the run spec. With the render tier stored on the same grid,
 the dot's geometry is drawn faintly behind them.
 """
-function plot_densities(res::CICalcResults, name::AbstractString, i::Integer;
-                        fraction::Real = 0.5, geometry::Bool = true, size = (620, 560),
-                        title = nothing)
+plot_densities(res::CICalcResults, name::AbstractString, i::Integer; size = nothing, kwargs...) =
+    _single(pos -> draw_densities!(pos, res, name, i; kwargs...), size)
+
+"""
+    draw_densities!(pos, res, name, i; fraction = 0.5, geometry = true, title)
+        -> (; layout, axis, size)
+
+[`plot_densities`](@ref) drawn into a grid position.
+"""
+function draw_densities!(pos, res::CICalcResults, name::AbstractString, i::Integer;
+                         fraction::Real = 0.5, geometry::Bool = true, title = nothing)
     s = _sector_state(res, name, i)
     haskey(s.densities, i) || throw(ArgumentError(
         "no densities are stored for $(s.name) state $i" *
@@ -79,22 +87,31 @@ function plot_densities(res::CICalcResults, name::AbstractString, i::Integer;
         ". Add it to `densities:` of sector $(s.name) in the run spec."))
     d = s.densities[i]
     xyz = d.coords
-    fig = Figure(size = size)
-    ax = _axis3_titled(fig, title === nothing ? _state_title(s, i) : title)
+    gl = GridLayout(pos)
+    ax = _axis3_titled(gl, title === nothing ? _state_title(s, i) : title)
     geometry && _geometry!(ax, _render_geometry(res, xyz), xyz)
-    shown = Any[]
-    for (ρ, kind) in ((_val(d.e), :electron), (_val(d.h), :hole))
-        maximum(ρ) > 0 || continue
+    _density_legend!(gl[3, 1], _density_pair!(ax, _val(d.e), _val(d.h), xyz, fraction))
+    return (; layout = gl, axis = ax, size = (620, 560))
+end
+
+# a state's electron and hole densities as isosurfaces, each enclosing `fraction` of
+# its particle; the kinds drawn
+function _density_pair!(ax, ρe, ρh, xyz, fraction)
+    shown = Symbol[]
+    for (ρ, kind) in ((ρe, :electron), (ρh, :hole))
+        (ρ === nothing || !(maximum(ρ) > 0)) && continue
         m = isosurface_mesh(Float64.(ρ), xyz..., isolevel(ρ, fraction))
         m === nothing && continue
         mesh!(ax, m; color = (kind_color(kind), 0.5), transparency = true)
         push!(shown, kind)
     end
-    isempty(shown) || Legend(fig[2, 1], [PolyElement(color = (kind_color(k), 0.5)) for k in shown],
+    return shown
+end
+
+_density_legend!(pos, shown) =
+    isempty(shown) || Legend(pos, [PolyElement(color = (kind_color(k), 0.5)) for k in shown],
                              string.(shown); orientation = :horizontal, framevisible = false,
                              tellheight = true)
-    return fig
-end
 
 # the stored exciton sector a biexciton can be written in: (1,1), with vectors kept,
 # over the same active orbitals
@@ -137,9 +154,19 @@ A level that is one irrep should be supported only on configurations whose produ
 contains it, so an occupied but forbidden cell means the labelling or the adaptation
 is wrong. Needs the state's CI vector (`keep:` of the sector).
 """
-function plot_configurations(res::CICalcResults, name::AbstractString, i::Integer;
-                             basis::Symbol = :auto, top::Integer = 16, nlevels::Integer = 8,
-                             size = nothing, title = nothing, colormap = _CONFIG_CMAP)
+plot_configurations(res::CICalcResults, name::AbstractString, i::Integer; size = nothing,
+                    kwargs...) =
+    _single(pos -> draw_configurations!(pos, res, name, i; kwargs...), size)
+
+"""
+    draw_configurations!(pos, res, name, i; basis = :auto, top = 16, nlevels = 8, title,
+                         colormap) -> (; layout, axis, size)
+
+[`plot_configurations`](@ref) drawn into a grid position.
+"""
+function draw_configurations!(pos, res::CICalcResults, name::AbstractString, i::Integer;
+                              basis::Symbol = :auto, top::Integer = 16, nlevels::Integer = 8,
+                              title = nothing, colormap = _CONFIG_CMAP)
     s = _sector_state(res, name, i)
     i <= s.nkept || throw(ArgumentError(
         "the CI vectors of $(s.name) are stored for its lowest $(s.nkept) states; " *
@@ -150,7 +177,7 @@ function plot_configurations(res::CICalcResults, name::AbstractString, i::Intege
     if basis === :species || (basis === :auto && Ne >= 1 && Nh >= 1 && Ne + Nh == 3)
         Ne >= 1 && Nh >= 1 || throw(ArgumentError(
             "basis = :species needs a sector with both electrons and holes; $(s.name) is $(s.sector)"))
-        return _plot_by_species(res, s, i; size, title, colormap)
+        return _draw_by_species!(pos, res, s, i; title, colormap)
     end
     if s.sector == (2, 2) && basis in (:auto, :excitons)
         x = _exciton_sector(res, s)
@@ -159,17 +186,16 @@ function plot_configurations(res::CICalcResults, name::AbstractString, i::Intege
                 "writing $(s.name) in excitons needs the exciton sector with its vectors: " *
                 "add `X: {keep: all}` to the run spec's sectors"))
         else
-            return _plot_in_excitons(res, s, x, i; nlevels, size, title, colormap)
+            return _draw_in_excitons!(pos, res, s, x, i; nlevels, title, colormap)
         end
     end
-    size = something(size, (600, 460))
     v = _val(s.vectors)[:, i]
     ne, nh = length(s.estates), length(s.hstates)
     occ(b) = ([e for e in 1:ne if (b >> (e - 1)) & 1 == 1],
               [h for h in 1:nh if (b >> (ne + h - 1)) & 1 == 0])
     olab(st, k, pre) = (l = _orbital_label(res, st[k].orb); isempty(l) ? "$pre$k" : "$pre$k\n$l")
     w = abs2.(v)
-    fig = Figure(size = size)
+    gl = GridLayout(pos)
     ttl = title === nothing ? _state_title(s, i) : title
     if s.sector == (1, 1)
         W = zeros(ne, nh)
@@ -177,7 +203,7 @@ function plot_configurations(res::CICalcResults, name::AbstractString, i::Intege
             es, hs = occ(b)
             W[only(es), only(hs)] += w[k]
         end
-        ax = Axis(fig[1, 1]; title = ttl, xlabel = "hole", ylabel = "electron",
+        ax = Axis(gl[1, 1]; title = ttl, xlabel = "hole", ylabel = "electron",
                   xticks = (1:nh, [olab(s.hstates, h, "h") for h in 1:nh]),
                   yticks = (1:ne, [olab(s.estates, e, "e") for e in 1:ne]),
                   aspect = DataAspect())
@@ -187,24 +213,24 @@ function plot_configurations(res::CICalcResults, name::AbstractString, i::Intege
             text!(ax, h, e; text = @sprintf("%.2f", W[e, h]), align = (:center, :center),
                   fontsize = 10, color = W[e, h] > 0.5 * maximum(W) ? :white : :black)
         end
-        Colorbar(fig[1, 2], hm; label = "|C|²")
+        Colorbar(gl[1, 2], hm; label = "|C|²")
     else
         ord = sortperm(w; rev = true)[1:min(top, length(w))]
         labs = map(ord) do k
             es, hs = occ(s.basis[k])
             join(("e$e" for e in es), " ") * " | " * join(("h$h" for h in hs), " ")
         end
-        ax = Axis(fig[1, 1]; title = ttl, ylabel = "|C|²",
+        ax = Axis(gl[1, 1]; title = ttl, ylabel = "|C|²",
                   xticks = (eachindex(ord), labs), xticklabelrotation = π / 4)
         barplot!(ax, eachindex(ord), w[ord]; color = kind_color(:electron))
-        Label(fig[2, 1], @sprintf("the %d largest of %d determinants (Σ = %.3f)", length(ord),
-                                  length(w), sum(w[ord])); fontsize = 10, color = _MUTED,
+        Label(gl[2, 1], @sprintf("the %d largest of %d determinants (Σ = %.3f)", length(ord),
+                                 length(w), sum(w[ord])); fontsize = 10, color = _MUTED,
               tellwidth = false)
     end
-    return fig
+    return (; layout = gl, axis = ax, size = (600, 460))
 end
 
-function _plot_by_species(res, s, i; size, title, colormap, cut = 1e-3)
+function _draw_by_species!(pos, res, s, i; title, colormap, cut = 1e-3)
     l = s.levels[findfirst(r -> i in r, s.levels)]
     last(l) <= s.nkept || throw(ArgumentError(
         "the level of $(s.name)$i is states $l, but only the lowest $(s.nkept) vectors are " *
@@ -218,12 +244,11 @@ function _plot_by_species(res, s, i; size, title, colormap, cut = 1e-3)
     function name(c, lv, st, p)
         irr = [_orbital_label(res, st[first(lv[k])].orb) for k in c]
         txt = _config_name(c, p)
-        all(isempty, irr) ? txt : txt * "
-" * join((isempty(x) ? "?" : x for x in irr), " · ")
+        all(isempty, irr) ? txt : txt * "\n" * join((isempty(x) ? "?" : x for x in irr), " · ")
     end
     nr, nc = length(rows), length(cols)
-    fig = Figure(size = something(size, (max(600, 110nc + 260), max(460, 60nr + 280))))
-    ax = Axis(fig[1, 1]; title = title === nothing ? _state_title(s, i) : title,
+    gl = GridLayout(pos)
+    ax = Axis(gl[1, 1]; title = title === nothing ? _state_title(s, i) : title,
               xlabel = s.sector[2] >= 2 ? "hole pair" : "hole",
               ylabel = s.sector[1] >= 2 ? "electron pair" : "electron",
               xticks = (1:nc, [name(w.hconfigs[c], w.hlevels, s.hstates, "H") for c in cols]),
@@ -236,17 +261,16 @@ function _plot_by_species(res, s, i; size, title, colormap, cut = 1e-3)
         text!(ax, c, r; text = @sprintf("%.3f", W[r, c]), align = (:center, :center), fontsize = 10,
               color = W[r, c] > 0.5top ? :white : :black)
     end
-    Colorbar(fig[1, 2], hm; label = "weight of (electrons, holes)")
+    Colorbar(gl[1, 2], hm; label = "weight of (electrons, holes)")
     λ(v) = join((@sprintf("%.3f", x) for x in v[1:min(3, end)]), " ")
-    Label(fig[2, 1:2], @sprintf("level %s%s (states %d:%d); the cells shown hold %.3f
-natural spectrum: electrons %s | holes %s; %d×%d natural states hold %.3f",
+    Label(gl[2, 1:2], @sprintf("level %s%s (states %d:%d); the cells shown hold %.3f\nnatural spectrum: electrons %s | holes %s; %d×%d natural states hold %.3f",
                                 s.name, string(findfirst(r -> i in r, s.levels)), first(l), last(l), sum(W),
                                 λ(w.λe), λ(w.λh), w.product.ranks..., w.product.weight);
           fontsize = 10, color = _MUTED, tellwidth = false)
-    return fig
+    return (; layout = gl, axis = ax, size = (max(600, 110nc + 260), max(460, 60nr + 280)))
 end
 
-function _plot_in_excitons(res, s, x, i; nlevels, size, title, colormap)
+function _draw_in_excitons!(pos, res, s, x, i; nlevels, title, colormap)
     w = exciton_pair_weights(SectorSolution(s), SectorSolution(x); states = [i],
                              xlevels = x.levels, nlevels)
     L = length(w.levels)
@@ -255,8 +279,8 @@ function _plot_in_excitons(res, s, x, i; nlevels, size, title, colormap)
     lab(k) = isempty(x.labels) || isempty(x.labels[k]) ? "" : x.labels[k]
     names = [string(x.name, k, "  ", lab(k)) for k in 1:L]
     top = maximum(filter(isfinite, Z); init = 0.0)
-    fig = Figure(size = something(size, (max(560, 70L + 300), max(520, 60L + 300))))
-    ax = Axis(fig[1, 1]; title = title === nothing ? _state_title(s, i) : title,
+    gl = GridLayout(pos)
+    ax = Axis(gl[1, 1]; title = title === nothing ? _state_title(s, i) : title,
               xlabel = "exciton level", ylabel = "exciton level",
               xticks = (1:L, names), yticks = (1:L, names), xticklabelrotation = π / 4,
               aspect = DataAspect())
@@ -266,10 +290,10 @@ function _plot_in_excitons(res, s, x, i; nlevels, size, title, colormap)
         text!(ax, a, b; text = @sprintf("%.2f", W[a, b]), align = (:center, :center), fontsize = 10,
               color = W[a, b] > 0.5top ? :white : :black)
     end
-    Colorbar(fig[1, 2], hm; label = "weight of the exciton pair (A, B)")
-    Label(fig[2, 1:2], @sprintf("¼ Σ |⟨XX|Xₐ† X_b†|0⟩|² over the two levels; the lowest %d levels hold %.3f of the state",
+    Colorbar(gl[1, 2], hm; label = "weight of the exciton pair (A, B)")
+    Label(gl[2, 1:2], @sprintf("¼ Σ |⟨XX|Xₐ† X_b†|0⟩|² over the two levels; the lowest %d levels hold %.3f of the state",
                                 L, w.captured[1]); fontsize = 10, color = _MUTED, tellwidth = false)
-    return fig
+    return (; layout = gl, axis = ax, size = (max(560, 70L + 300), max(520, 60L + 300)))
 end
 
 """
@@ -280,20 +304,28 @@ of |ψ|², one surface per band group (S, HH, LH, SO or S, X, Y, Z) holding at l
 of the weight, coloured by group, or the total alone with `bands = false`. The render
 tier is a heavy product: add `orbitals:` to the run spec.
 """
-function plot_orbital(res::CICalcResults, k::Integer; fraction::Real = 0.5,
-                      bands::Bool = true, geometry::Bool = true, size = (620, 560),
-                      title = nothing)
+plot_orbital(res::CICalcResults, k::Integer; size = nothing, kwargs...) =
+    _single(pos -> draw_orbital!(pos, res, k; kwargs...), size)
+
+"""
+    draw_orbital!(pos, res, k; fraction = 0.5, bands = true, geometry = true, title)
+        -> (; layout, axis, size)
+
+[`plot_orbital`](@ref) drawn into a grid position.
+"""
+function draw_orbital!(pos, res::CICalcResults, k::Integer; fraction::Real = 0.5,
+                       bands::Bool = true, geometry::Bool = true, title = nothing)
     ro = get(res.extra, "render/orbitals", nothing)
     ro === nothing && _missing_product("render tier (orbitals on a coarse grid)",
                                        "Add `orbitals: {stride: 2}` to the run spec's `compute`.")
     n = length(ro.energies)
     1 <= k <= n || throw(ArgumentError("orbital $k is out of range 1:$n"))
     lab = _orbital_label(res, k)
-    fig = Figure(size = size)
+    gl = GridLayout(pos)
     ttl = title === nothing ?
         @sprintf("orbital %d (%s)   %.4f eV%s", k, ro.kind[k] === :e ? "electron" : "hole",
                  ro.energies[k], isempty(lab) ? "" : "   " * lab) : title
-    ax = _axis3_titled(fig, ttl)
+    ax = _axis3_titled(gl, ttl)
     geometry && ro.geometry !== nothing && _geometry!(ax, Float64.(_val(ro.geometry)), ro.coords)
     if bands && ro.by_group !== nothing
         G = _val(ro.by_group)[:, :, :, :, k]
@@ -310,7 +342,7 @@ function plot_orbital(res::CICalcResults, k::Integer; fraction::Real = 0.5,
             push!(els, PolyElement(color = (cols[g], 0.45)))
             push!(names, @sprintf("%s  %.0f%%", name, 100wgt))
         end
-        isempty(els) || Legend(fig[2, 1], els, names; orientation = :horizontal,
+        isempty(els) || Legend(gl[3, 1], els, names; orientation = :horizontal,
                                framevisible = false, tellheight = true)
     else
         ρ = Float64.(_val(ro.total)[:, :, :, k])
@@ -318,5 +350,5 @@ function plot_orbital(res::CICalcResults, k::Integer; fraction::Real = 0.5,
         m === nothing || mesh!(ax, m; color = (kind_color(ro.kind[k] === :e ? :electron : :hole), 0.5),
                                transparency = true)
     end
-    return fig
+    return (; layout = gl, axis = ax, size = (620, 560))
 end

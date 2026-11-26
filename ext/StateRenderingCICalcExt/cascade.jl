@@ -98,10 +98,19 @@ Everything shown is radiative: lifetimes are 1/Γ into the whole next sector, an
 populations assume no relaxation or spin flips between levels of a sector (see
 `CICalc.cascade_bundle`).
 """
-function plot_cascade(cb::CascadeBundle; size = nothing, min_yield::Real = 1e-4,
-                      max_arrows::Integer = 16, label_arrows::Integer = 3,
-                      manifold_tol::Real = 1e-3, scale::Symbol = :log,
-                      split::Symbol = :irrep, title = nothing)
+plot_cascade(cb::CascadeBundle; size = nothing, kwargs...) =
+    _single(pos -> draw_cascade!(pos, cb; kwargs...), size)
+
+"""
+    draw_cascade!(pos, cb::CascadeBundle; min_yield, max_arrows, label_arrows,
+                  manifold_tol, scale, split, title) -> (; layout, axis, size)
+
+[`plot_cascade`](@ref) drawn into a grid position; `axis` is the pathway axis.
+"""
+function draw_cascade!(pos, cb::CascadeBundle; min_yield::Real = 1e-4,
+                       max_arrows::Integer = 16, label_arrows::Integer = 3,
+                       manifold_tol::Real = 1e-3, scale::Symbol = :log,
+                       split::Symbol = :irrep, title = nothing)
     scale in (:log, :linear) || throw(ArgumentError("scale must be :log or :linear"))
     split in (:irrep, :none) || throw(ArgumentError("split must be :irrep or :none"))
     K = length(cb.names)
@@ -125,26 +134,26 @@ function plot_cascade(cb::CascadeBundle; size = nothing, min_yield::Real = 1e-4,
     unshown = get(cb.metadata, :unshown, Float64[])
     others = [k > 1 && k - 1 <= length(unshown) && unshown[k-1] > min_yield for k in 1:K]
     nrows = maximum(length(cb.levels[k]) + others[k] for k in 1:K)
-    fig = Figure(size = size === nothing ?
-                 (1250, max(560, 200 + 62 * nrows, 160 + 150 * nrow)) : size)
+    gl = GridLayout(pos)
     ttl = title === nothing ?
         @sprintf("radiative cascade %s   (E_P = %.3g eV, n_r = %.3g)",
                  join(cb.names, " → "), cb.E_P, cb.n_r) : title
-    Label(fig[0, 1:3], ttl; fontsize = 15, tellwidth = false)
+    Label(gl[1, 1:3], ttl; fontsize = 15, tellwidth = false)
 
-    _pathways!(fig[1, 1], cb, lines_all, others, unshown; min_yield, max_arrows,
+    ax = _pathways!(gl[2, 1], cb, lines_all, others, unshown; min_yield, max_arrows,
                label_arrows, manifold_tol)
-    _channel_spectrum!(fig[1, 2], cb, shown, keys, key, pivot; min_yield, scale)
-    Colorbar(fig[1, 3]; colormap = _POL_GRAD, limits = (0, 1),
+    _channel_spectrum!(gl[2, 2], cb, shown, keys, key, pivot; min_yield, scale)
+    Colorbar(gl[2, 3]; colormap = _POL_GRAD, limits = (0, 1),
              label = "axial share (" * cb.polnames[3] * ")", width = 12)
-    colsize!(fig.layout, 1, Relative(0.5))
+    colsize!(gl, 1, Relative(0.5))
 
     nhid = count(s -> s.y >= min_yield, lines_all) - min(max_arrows,
                                                          count(s -> s.y >= min_yield, lines_all))
     note = "radiative only: no relaxation between levels of a sector"
     nhid > 0 && (note *= "  ·  $nhid weaker pathway(s) not drawn as arrows (all are in the spectrum)")
-    Label(fig[2, 1:3], note; fontsize = 10, color = _MUTED, tellwidth = false)
-    return fig
+    Label(gl[3, 1:3], note; fontsize = 10, color = _MUTED, tellwidth = false)
+    return (; layout = gl, axis = ax,
+            size = (1250, max(560, 200 + 62 * nrows, 160 + 150 * nrow)))
 end
 
 # the row of each level in a column: highest energy on top, one unit per level and

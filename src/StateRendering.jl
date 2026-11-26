@@ -130,4 +130,32 @@ function plot_sector end
 function save_figures end
 export plot_sector, save_figures
 
+# each archive figure as a panel in a grid position (`draw_*!(fig[1, 1], …)`), returning
+# `(; layout, axis, size)`: a `plot_*` is a Figure around one of these, and the CICalc
+# explorer is built from them
+function draw_sector! end
+function draw_densities! end
+function draw_configurations! end
+function draw_orbital! end
+function draw_cascade! end
+export draw_sector!, draw_densities!, draw_configurations!, draw_orbital!, draw_cascade!
+
+# the explorer of a CICalc results archive: its model (the state structure as a graph,
+# and the selection on it), defined by the CICalc extension
+function explorer_model end
+function node_name end
+function select! end
+function focus! end
+function back! end
+function forward! end
+function step! end
+function follow! end
+function find_levels end
+function decay_tree end
+function feeders end
+function availability end
+export explorer_model
+public node_name, select!, focus!, back!, forward!, step!, follow!, find_levels, decay_tree,
+       feeders, availability
+
 end # module StateRendering
