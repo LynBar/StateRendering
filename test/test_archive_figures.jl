@@ -311,6 +311,17 @@ end
     @test sum(sum(g.n) for g in no.e) ≈ 2 atol = 1e-8
     @test plot_natural_orbitals(res, "XX", collect(xx.levels[1])) isa Figure
     @test plot_natural_orbitals(res, "X", 1; pick = (:h, 1)) isa Figure
+    # the panels of a figure turn together
+    fn = Figure()
+    draw_natural_orbitals!(fn[1, 1], res, "XX", 1; groups = 2)
+    axs = [c for c in fn.content if c isa Axis3]
+    @test length(axs) >= 2
+    first(axs).azimuth[] = 0.7; first(axs).elevation[] = 0.3
+    @test all(a -> a.azimuth[] == 0.7 && a.elevation[] == 0.3, axs)
+    # a group is named by the carriers it holds; "Kramers pair" only for a level's average
+    g2 = (n = [1.0, 1.0],)
+    @test X._no_name(:h, 1, g2) == "h NO 1   2.00 holes in a Kramers pair"
+    @test X._no_name(:h, 1, g2; paired = false) == "h NO 1   2.00 holes in 2 orbitals"
     # constituents: the heaviest pair by default; every pair's weight, summing to what
     # the lowest levels capture
     f = Figure()

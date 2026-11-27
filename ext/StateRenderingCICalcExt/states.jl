@@ -394,10 +394,36 @@ end
 
 # ── natural orbitals ─────────────────────────────────────────────────────────
 
-# a group of natural orbitals: its occupation per spin-orbital, and how many Kramers pairs
-_no_mult(m) = m == 1 ? "" : m == 2 ? ", a Kramers pair" : iseven(m) ? ", $(m ÷ 2) Kramers pairs" : " (×$m)"
-_no_name(kind, g, grp) = @sprintf("%s NO %d   n = %.3f%s", kind === :e ? "e" : "h", g,
-                                  sum(grp.n) / length(grp.n), _no_mult(length(grp.n)))
+# A group of natural orbitals, by how many carriers it holds: Σ n over the group. A
+# Kramers pair holds up to 2. Counting per pair, not per spin-orbital, is what reads
+# right for a level: averaged over a Kramers-degenerate level, one hole shows as 0.5 in
+# each partner, yet the pair holds the whole hole, 1.00. Only a level's average is
+# time-reversal symmetric, so only there is a group of two a Kramers pair (`paired`); for
+# one state a group of two is just two orbitals of one occupation.
+function _no_name(kind, g, grp; paired::Bool = true)
+    m = length(grp.n)
+    what = m == 1 ? "1 orbital" : !(paired && iseven(m)) ? "$m orbitals" :
+           m == 2 ? "a Kramers pair" : "$(m ÷ 2) Kramers pairs"
+    return @sprintf("%s NO %d   %.2f %s in %s", kind === :e ? "e" : "h", g, sum(grp.n),
+                    kind === :e ? "electrons" : "holes", what)
+end
+
+# every Axis3 of a figure turns with the others: azimuth, elevation and zoom
+function _link_cameras!(axes)
+    axs = [a for a in axes if a !== nothing]
+    length(axs) < 2 && return nothing
+    for attr in (:azimuth, :elevation, :zoommult), a in axs
+        attr in propertynames(a) || continue
+        on(getproperty(a, attr)) do v
+            for b in axs
+                b === a && continue
+                o = getproperty(b, attr)
+                o[] == v || (o[] = v)
+            end
+        end
+    end
+    return nothing
+end
 
 """
     plot_natural_orbitals(res::CICalcResults, name, states; groups = 3, fraction = 0.5,
@@ -406,10 +432,24 @@ _no_name(kind, g, grp) = @sprintf("%s NO %d   n = %.3f%s", kind === :e ? "e" : "
 The natural orbitals of a stored state, or of a level (pass its states: the density
 matrix is averaged over them), from its CI vectors and the orbital amplitudes
 (`orbitals: {amplitudes: true}`). The `groups` most occupied of each species, electrons
-on top and holes below. A group is a set of natural orbitals with one occupation n (a
-Kramers pair, an irrep's partners); its summed density is drawn, the isosurface
-enclosing `fraction` of it. One configuration has occupations of 1 and 0; correlation
-spreads them, and the occupations say over how many orbitals each species is spread.
+on top and holes below.
+
+**What is drawn.** The density matrix of each species is diagonalised: its eigenvectors
+are the natural orbitals (combinations of the stored orbitals), its eigenvalues their
+occupations, and the species' density is Σ occupation × |natural orbital|². A group is
+the natural orbitals with one occupation (within 1e-3): a Kramers pair, or pairs the
+breaking mixes. Each panel draws a group's summed density, the isosurface enclosing
+`fraction` of it, titled with how many carriers the group holds (Σ of its occupations;
+a pair holds up to 2).
+
+**How to read it.** One configuration (one Slater determinant per species) puts whole
+carriers in a few groups: 2.00 electrons in a pair is a closed shell. Correlation
+spreads carriers over more groups, and the leftovers (0.01, 0.02, …) are how much.
+For a level, the matrix is averaged over its states: a Kramers-degenerate trion level
+(X⁻: states 1, 2) has its one hole half in each partner of a pair in each state's
+average, which is why it reads "1.00 holes in a Kramers pair", not a full occupation
+of one orbital. Within one Kramers state the hole is in one partner; the pair's
+density is the same either way.
 """
 plot_natural_orbitals(res::CICalcResults, name::AbstractString, states; size = nothing, kwargs...) =
     _single(pos -> draw_natural_orbitals!(pos, res, name, states; kwargs...), size)
@@ -438,7 +478,7 @@ function draw_natural_orbitals!(pos, res::CICalcResults, name::AbstractString, s
     function panel(p, kind, g)
         grp = getproperty(no, kind)[g]
         sub = GridLayout(p)
-        ax = _axis3_titled(sub, _no_name(kind, g, grp))
+        ax = _axis3_titled(sub, _no_name(kind, g, grp; paired = length(S) > 1))
         χ === nothing || _geometry!(ax, χ, no.coords)
         ρ = grp.density
         m = isosurface_mesh(ρ, no.coords..., isolevel(ρ, fraction))
@@ -446,11 +486,9 @@ function draw_natural_orbitals!(pos, res::CICalcResults, name::AbstractString, s
                                transparency = true)
         return ax
     end
-    occ(v) = join((@sprintf("%.3f", sum(g.n) / length(g.n)) *
-                   (iseven(length(g.n)) ? (length(g.n) == 2 ? "" : "×$(length(g.n) ÷ 2)") : "×$(length(g.n))/2")
-                   for g in v[1:min(4, end)]), " ")
-    foot = "occupation per spin-orbital, one entry per Kramers pair (×k: k pairs that agree within " *
-           "1e-3, mixed by the breaking): electrons " * occ(no.e) * " | holes " * occ(no.h)
+    occ(v) = join((@sprintf("%.2f", sum(g.n)) for g in v[1:min(4, end)]), " + ")
+    foot = "carriers per group (a Kramers pair holds up to 2; groups within 1e-3 merge, mixed " *
+           "by the breaking): electrons " * occ(no.e) * " | holes " * occ(no.h)
     if pick !== nothing
         kind, g = pick
         1 <= g <= length(getproperty(no, kind)) || throw(ArgumentError(
@@ -463,11 +501,9 @@ function draw_natural_orbitals!(pos, res::CICalcResults, name::AbstractString, s
     ne, nh = min(groups, length(no.e)), min(groups, length(no.h))
     nc = max(ne, nh, 1)
     Label(gl[1, 1:nc], which * ": natural orbitals"; fontsize = 15, font = :bold, tellwidth = false)
-    first_ax = nothing
-    for (row, kind, n) in ((2, :e, ne), (3, :h, nh)), g in 1:n
-        ax = panel(gl[row, g], kind, g)
-        first_ax === nothing && (first_ax = ax)
-    end
+    axs = [panel(gl[row, g], kind, g) for (row, kind, n) in ((2, :e, ne), (3, :h, nh)) for g in 1:n]
+    _link_cameras!(axs)
+    first_ax = isempty(axs) ? nothing : first(axs)
     Label(gl[4, 1:nc], foot; fontsize = 10, color = _MUTED, tellwidth = false, word_wrap = true)
     return (; layout = gl, axis = first_ax, size = (320nc + 40, 700), no)
 end
@@ -515,7 +551,7 @@ function draw_constituents!(pos, res::CICalcResults, name::AbstractString, i::In
     gl = GridLayout(pos)
     Label(gl[1, 1:2], @sprintf("%s  ⊃  %s%d · %s%d   (weight %.3f)", _state_title(s, i), x.name, A,
                                x.name, B, wt); fontsize = 15, font = :bold, tellwidth = false)
-    first_ax = nothing
+    axs = Any[]
     for (c, L) in enumerate(A == B ? (A,) : (A, B))
         d, _ = _state_densities(res, x, collect(lv[L]); amplitudes)
         sub = GridLayout(gl[2, c])
@@ -523,8 +559,10 @@ function draw_constituents!(pos, res::CICalcResults, name::AbstractString, i::In
         ax = _axis3_titled(sub, @sprintf("%s%d%s%s", x.name, L, lab, A == B ? "  (twice)" : ""))
         geometry && _geometry!(ax, _render_geometry(res, d.coords), d.coords)
         _density_legend!(sub[3, 1], _density_pair!(ax, d.e, d.h, d.coords, fraction))
-        first_ax === nothing && (first_ax = ax)
+        push!(axs, ax)
     end
+    _link_cameras!(axs)
+    first_ax = first(axs)
     Label(gl[3, 1:2], "each exciton level's densities, averaged over its states; the weight is " *
                       "¼ Σ |⟨XX|Xₐ† X_b†|0⟩|² over the two levels";
           fontsize = 10, color = _MUTED, tellwidth = false)

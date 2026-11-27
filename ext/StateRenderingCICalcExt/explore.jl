@@ -538,7 +538,7 @@ function _pick_options(e::Explorer)
         no = _level_nos(m, x)
         opts, items = ["all, most occupied first"], Any[nothing]
         for (kind, v) in ((:e, no.e), (:h, no.h)), g in eachindex(v)
-            push!(opts, _no_name(kind, g, v[g]))
+            push!(opts, _no_name(kind, g, v[g]; paired = length(x.states) > 1))
             push!(items, (kind, g))
         end
         return opts, items, 1
