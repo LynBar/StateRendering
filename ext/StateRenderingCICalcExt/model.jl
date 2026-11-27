@@ -156,6 +156,9 @@ function select!(m::ExplorerModel, id::Integer; state = nothing)
     st = something(state, first(m.nodes[id].states))
     st in m.nodes[id].states || throw(ArgumentError(
         "state $st is not one of $(node_name(m, id))'s ($(join(m.nodes[id].states, ", ")))"))
+    # an odd sector focuses a Kramers pair, by its first state when that is in the node
+    lead = first(pair_of(m, m.nodes[id].sector, st))
+    lead in m.nodes[id].states && (st = lead)
     if id == m.selection[]
         st == m.focus[] || (m.focus[] = st)
         return m
@@ -177,16 +180,55 @@ becomes the selection.
 """
 function focus!(m::ExplorerModel, i::Integer)
     x = m.nodes[m.selection[]]
+    i = first(pair_of(m, x.sector, i))         # a Kramers pair is focused by its first state
     k = findfirst(y -> y.sector == x.sector && y.level == x.level && i in y.states, m.nodes)
     k === nothing && throw(ArgumentError(
         "state $i is not in the level of $(node_name(m, x.id))"))
     return select!(m, k; state = i)
 end
 
-# the states of the selection's level, in energy order
+# the states of the selection's level, in energy order; in an odd sector one per Kramers
+# pair (its first), the focus steps through pairs
 level_states(m::ExplorerModel) =
     (x = m.nodes[m.selection[]];
-     sort!(reduce(vcat, [y.states for y in m.nodes if y.sector == x.sector && y.level == x.level])))
+     unique!(sort!([first(pair_of(m, x.sector, i))
+                    for y in m.nodes if y.sector == x.sector && y.level == x.level
+                    for i in y.states])))
+
+# ── Kramers pairs ───────────────────────────────────────────────────────────
+# A sector with an odd number of fermions has Kramers-degenerate states, T ψ and ψ, which
+# agree in everything spin-blind (densities, make-up by orbital pair, natural
+# occupations): the explorer treats each pair as one state. An even sector (X, XX) has no
+# such pairs, and its states within a level are distinct physics (dark, bright).
+
+_odd(s) = isodd(sum(s.sector))
+
+# state ⇒ its Kramers pair, within each level of an odd sector, in energy order (of
+# anything with `sector`, `levels` and `energies`: a StoredSector)
+function _kramers_map(s)
+    d = Dict{Int,Vector{Int}}()
+    _odd(s) || return d
+    for l in s.levels
+        for p in kramers_pairs(s.energies[l]; tol = Inf)   # the level is one block
+            pr = collect(l)[p]
+            foreach(i -> d[i] = pr, pr)
+        end
+    end
+    return d
+end
+
+_state_pairs(m::ExplorerModel, sector) =
+    get!(() -> _kramers_map(m.res.sectors[sector]), m.cache, (:kramers, sector))
+
+"""
+    pair_of(m, sector, i) -> Vector{Int}
+
+State `i`'s Kramers pair in an odd sector (both states, in index order), or `[i]`.
+"""
+pair_of(m::ExplorerModel, sector, i::Integer) = get(_state_pairs(m, sector), i, [i])
+
+"The focused state's Kramers pair (odd sectors), or the focused state alone."
+focus_states(m::ExplorerModel) = pair_of(m, m.nodes[m.selection[]].sector, m.focus[])
 
 "`back!(m)`, `forward!(m)`: move along the selection history."
 function back!(m::ExplorerModel)
@@ -308,18 +350,24 @@ feeders(m::ExplorerModel, id::Integer) =
     availability(m, id) -> NamedTuple
 
 What the archive holds for node `id`, and for what it lacks, the spec key that would
-fill it: `vectors` (its CI vectors, `keep:`), `densities` (`densities:`), `rates` (lines
-out), `orbitals` (the render tier). Each is `true` or the text to show instead.
+fill it: `vectors` (its CI vectors, `keep:`), `amplitudes` (the amplitude tier),
+`densities` (stored, or from its vectors and the amplitudes), `rates` (lines out),
+`orbitals` (the render tier). Each is `true` or the text to show instead.
 """
 function availability(m::ExplorerModel, id::Integer)
     x = m.nodes[id]
     s = m.res.sectors[x.sector]
     vec = last(x.states) <= s.nkept ||
           "raise `keep:` of sector $(x.sector) to $(last(x.states)) or more"
-    den = any(i -> haskey(s.densities, i), x.states) ||
-          "add $(join(x.states, ", ")) to `densities:` of sector $(x.sector)"
+    amp = _has_amplitudes(m.res) || "add `orbitals: {amplitudes: true}` to the run spec's `compute`"
+    den = any(i -> haskey(s.densities, i), x.states) || (vec === true && amp === true) ||
+          (vec === true ? amp * " (densities of every kept state)" : vec) *
+          ", or add $(join(x.states, ", ")) to `densities:` of sector $(x.sector)"
     rat = isfinite(m.total[id]) || (sum(x.charge) == 0 ? "the vacuum emits nothing" :
           "add `rates:` from $(x.sector) to the run spec's `compute`")
     orb = haskey(m.res.extra, "render/orbitals") || "add `orbitals:` to the run spec's `compute`"
-    return (; vectors = vec, densities = den, rates = rat, orbitals = orb)
+    return (; vectors = vec, amplitudes = amp, densities = den, rates = rat, orbitals = orb)
 end
+
+_has_amplitudes(res) = (ro = get(res.extra, "render/orbitals", nothing);
+                        ro !== nothing && get(ro, :amplitudes, nothing) !== nothing)

@@ -46,7 +46,8 @@ bundle; see its docstring for the band-basis argument it requires.
 With `CICalc` loaded, a results archive (`CICalc.CICalcResults`, from
 `load_results` or a run spec) is drawn by [`save_figures`](@ref) (everything it
 supports), [`plot_sector`](@ref), [`plot_cascade`](@ref), and per state by
-[`plot_densities`](@ref), [`plot_configurations`](@ref) and [`plot_orbital`](@ref).
+[`plot_densities`](@ref), [`plot_configurations`](@ref) and [`plot_orbital`](@ref);
+with the amplitude tier, [`plot_natural_orbitals`](@ref) and [`plot_constituents`](@ref).
 Point-group labels reach the single-particle figures through their `labels` keyword.
 
 The labelling figures draw a `CICalc.LevelBundle` (`level_bundle(ks, analysis)`):
@@ -139,6 +140,14 @@ function draw_configurations! end
 function draw_orbital! end
 function draw_cascade! end
 export draw_sector!, draw_densities!, draw_configurations!, draw_orbital!, draw_cascade!
+
+# the amplitude tier of an archive (`orbitals: {amplitudes: true}`): a stored state's or
+# level's natural orbitals, and a biexciton's exciton pair, as figures and as panels
+function plot_natural_orbitals end
+function draw_natural_orbitals! end
+function plot_constituents end
+function draw_constituents! end
+export plot_natural_orbitals, draw_natural_orbitals!, plot_constituents, draw_constituents!
 
 # the explorer of a CICalc results archive: its model (the state structure as a graph,
 # and the selection on it), defined by the CICalc extension

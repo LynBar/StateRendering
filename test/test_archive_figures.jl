@@ -19,7 +19,7 @@ include(joinpath(dirname(pathof(CICalc)), "..", "test", "symmetry", "synthetic_s
 const AF = SymmetryFrame("C3v"; axis = [1, 1, 1], inplane = [1, 1, -2])
 const AD = double_irreps(AF)
 
-function archive()
+function archive(; amplitudes = false)
     ks, a = analyse_symmetry(symmetric_states(AF; irreps_e = AD[1:2], irreps_h = AD[[1, 3, 2]],
                                               n = 13, seed = 8, basis = :jmj), AF)
     o = OrbitalSet(ks; labels = a)
@@ -36,7 +36,7 @@ function archive()
     store!(res, "XX→X", radiative_rates(d, kept, X; E_P = 22u"eV", n_r = 3.5))
     store!(res, "X→0", radiative_rates(d, X, G0; E_P = 22u"eV", n_r = 3.5))
     store!(res, "XX→X→0", cascade_bundle(d, [XX, X, G0]; E_P = 22u"eV", n_r = 3.5))
-    store!(res, "render/orbitals", render_orbitals(ks; stride = 1))
+    store!(res, "render/orbitals", render_orbitals(ks; stride = 1, amplitudes))
     return res
 end
 
@@ -232,13 +232,24 @@ end
     T = X._val(res.extra["render/orbitals"].total)
     @test sum(od.e) ≈ sum(n.e[j] * sum(Float64.(T[:, :, :, st.orb]))
                           for (j, st) in enumerate(res.sectors["X"].estates)) rtol = 1e-10
-    # the orbital menu follows the focused state: its most occupied orbital, occupations shown
-    o = e.state[:orbital][]
+    # the orbital menu follows the focused state: one entry per Kramers pair, the most
+    # occupied pair first selected, occupations shown
+    e.state[:mode3d][] = "orbital"; X._draw_3d!(e)
+    o = e.state[:pick][]
     nf = X._occupations(m, "X", [m.focus[]])
-    occ = vcat([(st.orb, nf.e[j]) for (j, st) in enumerate(res.sectors["X"].estates)],
-               [(st.orb, nf.h[j]) for (j, st) in enumerate(res.sectors["X"].hstates)])
-    @test o == first(occ[argmax(last.(occ))])
-    @test occursin("n ", e.state[:orbital_menu].options[][o])
+    occ = zeros(length(res.orbitals.energies))
+    foreach(((j, st),) -> occ[st.orb] = nf.e[j], enumerate(res.sectors["X"].estates))
+    foreach(((j, st),) -> occ[st.orb] = nf.h[j], enumerate(res.sectors["X"].hstates))
+    prs = X._orbital_pairs(res)
+    @test length(e.state[:pick_items]) == length(prs)
+    @test o == argmax([sum(occ[p.members]) for p in prs])
+    @test occursin("n ", e.state[:pick_menu].options[][o])
+    e.state[:mode3d][] = "densities"; X._draw_3d!(e)
+    # without the amplitude tier, natural orbitals and constituents say what to add
+    @test occursin("amplitudes: true", availability(m, k).amplitudes)
+    e.state[:mode3d][] = "natural orbitals"; X._draw_3d!(e)
+    @test e.state[:axis3d] === nothing
+    e.state[:mode3d][] = "densities"; X._draw_3d!(e)
     # the fine-structure strip: a click focuses a state, Tab steps through the level, and
     # the 3-D window follows the focused state
     multi = first(x for x in m.nodes if x.sector == "X" && length(X.level_states(select!(m, x.id))) > 1)
@@ -254,6 +265,94 @@ end
     save(joinpath(dir, "map.png"), e.fig); save(joinpath(dir, "3d.png"), e.fig3d)
     @test filesize(joinpath(dir, "map.png")) > 20_000
     @test_throws ArgumentError explore(res; lens = "phonons", display = false)
+end
+
+@testset "Kramers pairs" begin
+    X = Base.get_extension(StateRendering, :StateRenderingCICalcExt)
+    # orbitals: E1, E2, … and H1, … by degenerate pairs in energy order
+    r = CICalcResults()
+    r.orbitals = (energies = [1.0, 1.0 + 1e-11, 1.2, 1.3, 1.3, -0.5, -0.5 - 1e-11],
+                  kind = [:e, :e, :e, :e, :e, :h, :h])
+    prs = X._orbital_pairs(r)
+    @test [p.name for p in prs] == ["E1", "E2", "E3", "H1"]
+    @test [p.members for p in prs] == [[1, 2], [3], [4, 5], [6, 7]]
+    @test X._pair_of_orbital(r, 5) == 3
+    # an odd sector's states pair within each level; an even sector's do not
+    odd = (sector = (2, 1), levels = [1:2, 3:5], energies = [1.0, 1.0, 2.0, 2.0 + 2e-6, 2.0 + 1e-9])
+    d = X._kramers_map(odd)
+    @test d[1] == d[2] == [1, 2] && d[3] == d[5] == [3, 5] && d[4] == [4]
+    @test isempty(X._kramers_map((sector = (1, 1), levels = [1:2], energies = [1.0, 1.0])))
+    # an exciton over paired orbitals: one cell per pair of pairs, with the 2 × 2 inset
+    I = zeros(ComplexF64, 8, 8, 8, 8)
+    es = [CICalc.SPState(energy = E, band = :e, orb = k) for (k, E) in enumerate([0.8, 0.8, 0.9, 0.9])]
+    hs = [CICalc.SPState(energy = E, band = :h, orb = 4 + k) for (k, E) in enumerate([-0.7, -0.7, -0.75, -0.75])]
+    res = CICalcResults()
+    store!(res, "X", solve_sector(es, hs, I; Ne = 1, Nh = 1))
+    f = Figure()
+    p = draw_configurations!(f[1, 1], res, "X", 1)
+    @test p.kind === :pairs
+    @test length(p.axis.yticks[][1]) == 2 && length(p.axis.xticks[][1]) == 2
+    @test draw_configurations!(Figure()[1, 1], res, "X", 1; pairs = false).kind === :orbitals
+end
+
+@testset "the amplitude tier" begin
+    res = archive(; amplitudes = true)
+    X = Base.get_extension(StateRendering, :StateRenderingCICalcExt)
+    xs, xx = res.sectors["X"], res.sectors["XX"]
+    # densities of a state stored and not: the contraction reproduces the stored ones
+    rd = reduced_densities(res, "X", 1)
+    @test rd.e ≈ X._val(xs.densities[1].e) rtol = 1e-4
+    @test rd.h ≈ X._val(xs.densities[1].h) rtol = 1e-4
+    @test X._state_densities(res, xs, 1)[2] === :stored
+    @test X._state_densities(res, xs, 3)[2] === :amplitudes
+    @test plot_densities(res, "X", 3) isa Figure
+    # natural orbitals: a figure of every group, or one; the occupations sum to N
+    no = natural_orbitals(res, "XX", collect(xx.levels[1]); cut = 0.0)
+    @test sum(sum(g.n) for g in no.e) ≈ 2 atol = 1e-8
+    @test plot_natural_orbitals(res, "XX", collect(xx.levels[1])) isa Figure
+    @test plot_natural_orbitals(res, "X", 1; pick = (:h, 1)) isa Figure
+    # constituents: the heaviest pair by default; every pair's weight, summing to what
+    # the lowest levels capture
+    f = Figure()
+    c = draw_constituents!(f[1, 1], res, "XX", 1)
+    w = exciton_pair_weights(SectorSolution(xx), SectorSolution(xs); states = [1],
+                             xlevels = xs.levels, nlevels = 8)
+    @test sum(last, c.cells) ≈ w.captured[1] rtol = 1e-10
+    @test c.cell == (c.cells[1][1], c.cells[1][2]) && issorted(last.(c.cells); rev = true)
+    @test_throws ArgumentError plot_constituents(res, "X", 1)
+    dir = mktempdir()
+    paths = save_figures(res; out = dir, verbose = false)
+    names = Set(first(splitext(replace(relpath(q, dir), '\\' => '/'))) for q in paths)
+    @test issubset(["sectors/X/natural_orbitals_1", "sectors/XX/constituents_1",
+                    "sectors/XX/natural_orbitals_1", "sectors/0/levels"], names)
+    # the explorer: every mode of the 3-D window on X and XX levels
+    e = explore(res; display = false)
+    m = e.model
+    for name in ("X 1", "XX 1"), mode in X._MODES3D
+        select!(m, first(find_levels(m, name)))
+        e.state[:mode3d][] = mode; X._draw_3d!(e)
+        ok = !(mode == "constituents" && name == "X 1")
+        @test (e.state[:axis3d] !== nothing) == ok
+    end
+    @test availability(m, m.selection[]).densities === true
+    # the pick menu: all groups, then one; the densities' level average
+    e.state[:mode3d][] = "natural orbitals"; X._follow_pick!(e)
+    @test startswith(first(e.state[:pick_menu].options[]), "all")
+    e.state[:pick][] = 2; X._draw_3d!(e)
+    @test e.state[:axis3d] !== nothing
+    e.state[:mode3d][] = "densities"; X._follow_pick!(e)
+    e.state[:pick][] = 2; X._draw_3d!(e)                 # the level's average
+    @test e.state[:axis3d] !== nothing
+    # a click on a cell of XX's make-up (composition lens) shows that pair
+    e.lens[] = "composition"
+    @test e.state[:config].kind === :excitons
+    @test X._click_cell!(e, (1.1, 1.9)) == (1, 2)
+    @test e.state[:mode3d][] == "constituents"
+    @test e.state[:pick_items][e.state[:pick][]] == (1, 2)
+    @test e.state[:axis3d] !== nothing
+    @test X._click_cell!(e, (40, 40)) === nothing
+    save(joinpath(dir, "3d.png"), e.fig3d)
+    @test filesize(joinpath(dir, "3d.png")) > 20_000
 end
 
 end # module ArchiveFigureTests

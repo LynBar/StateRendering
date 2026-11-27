@@ -22,7 +22,8 @@ using Makie: latexstring
 using Printf
 using CICalc: LevelBundle, SymmetrySweep, CascadeBundle, line_yield,
               CICalcResults, StoredSector, HeavyRef, SectorSolution,
-              exciton_pair_weights, species_weights, _config_name, SymmetryFrame, subduction
+              exciton_pair_weights, species_weights, _config_name, SymmetryFrame, subduction,
+              reduced_densities, natural_orbitals, kramers_pairs
 using CICalc.Symmetry: labelled
 using StateRendering: isolevel, isosurface_mesh, smooth, state_axis3, kind_color,
                       irrep_color, component_color, component_palette,
@@ -32,7 +33,8 @@ import StateRendering: plot_densities, plot_configurations, plot_orbital,
                        plot_symmetry_quality, plot_charges, plot_parent_mixing,
                        plot_field_irreps, plot_sweep, plot_cascade, plot_sector,
                        save_figures, draw_sector!, draw_densities!, draw_configurations!,
-                       draw_orbital!, draw_cascade!, explorer_model, node_name, select!,
+                       draw_orbital!, draw_cascade!, plot_natural_orbitals, draw_natural_orbitals!,
+                       plot_constituents, draw_constituents!, explorer_model, node_name, select!,
                        focus!, back!, forward!, step!, follow!, find_levels, decay_tree, feeders,
                        availability, explore
 

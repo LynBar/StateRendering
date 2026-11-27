@@ -256,11 +256,14 @@ function _draw_fine!(e::Explorer)
     E0 = minimum(s.energies[st])
     irreps = _map_geometry(m, e.group[]).labels
     spread = 1e6 * (maximum(s.energies[st]) - E0)
-    # states within a column that are degenerate to the drawing sit side by side
+    # states within a column that are degenerate to the drawing sit side by side; in an
+    # odd sector a Kramers pair is one line, at its first state
     fine = NamedTuple[]
     for (c, y) in enumerate(parts)
-        n = length(y.states)
-        for (j, i) in enumerate(y.states)
+        leads = [i for i in y.states if first(pair_of(m, x.sector, i)) == i]
+        n = length(leads)
+        for (j, i) in enumerate(leads)
+            pr = pair_of(m, x.sector, i)
             v = 1e6 * (s.energies[i] - E0)
             dx = n > 1 ? 0.7 / n : 0.7
             x0 = c - 0.35 + (j - 1) * dx
@@ -269,14 +272,18 @@ function _draw_fine!(e::Explorer)
                                      linewidth = 8, inspectable = false)
             lines!(ax, [x0 + 0.04, x0 + dx - 0.04], [v, v]; color = irrep_color(y.label, irreps),
                    linewidth = 3, inspector_label = (_, _, _) -> _state_text(e, i))
-            text!(ax, x0 + dx / 2, v; text = string(i), align = (:center, :bottom), fontsize = 9,
+            text!(ax, x0 + dx / 2, v; text = join(pr, "·"), align = (:center, :bottom), fontsize = 9,
                   color = _MUTED, offset = (0, 3))
         end
     end
     e.state[:fine] = fine
     ax.xticks = (1:length(parts), [y.label for y in parts])
-    ax.title = @sprintf("%s%d fine structure: %d states over %.3g µeV; focused: state %d (click or Tab)",
-                        x.sector, x.level, length(st), spread, m.focus[])
+    npairs = length(unique(first(pair_of(m, x.sector, i)) for i in st))
+    ax.title = npairs < length(st) ?
+        @sprintf("%s%d fine structure: %d Kramers pair%s over %.3g µeV; focused: states %s (click or Tab)",
+                 x.sector, x.level, npairs, npairs == 1 ? "" : "s", spread, join(focus_states(m), ", ")) :
+        @sprintf("%s%d fine structure: %d states over %.3g µeV; focused: state %d (click or Tab)",
+                 x.sector, x.level, length(st), spread, m.focus[])
     for (k, v) in m.res.extra
         startswith(k, "effective/") || continue
         (v isa NamedTuple && hasproperty(v, :of) && v.of == x.sector && collect(v.states) == st) || continue
@@ -301,6 +308,9 @@ function _state_text(e::Explorer, i)
     x = m.nodes[m.selection[]]
     s = m.res.sectors[x.sector]
     lab = isempty(s.state_labels) || isempty(s.state_labels[i]) ? "?" : s.state_labels[i]
+    pr = pair_of(m, x.sector, i)
+    length(pr) == 2 && return @sprintf("%s states %d, %d (a Kramers pair)   %s\n%.6f eV", x.sector,
+                                       pr..., lab, s.energies[i])
     return @sprintf("%s state %d   %s\n%.6f eV", x.sector, i, lab, s.energies[i])
 end
 
@@ -351,6 +361,7 @@ function _draw_detail!(e::Explorer)
     Label(gl[1, 1], _card_text(e, id); justification = :left, halign = :left, fontsize = 12,
           tellwidth = false, color = _INK)
     lens = e.lens[]
+    e.state[:config] = nothing
     if lens == "recombination"
         for (row, ks, which, other) in ((2, m.out[id], "lines out", l -> l.to),
                                         (3, m.into[id], "lines in", l -> l.from))
@@ -383,7 +394,7 @@ function _draw_detail!(e::Explorer)
               tellheight = false, justification = :left, halign = :left, valign = :top)
     else
         try
-            draw_configurations!(gl[2, 1], m.res, x.sector, m.focus[])
+            e.state[:config] = draw_configurations!(gl[2, 1], m.res, x.sector, m.focus[])
         catch err
             err isa ArgumentError || rethrow()
             _note(gl[2, 1], sprint(showerror, err))
@@ -471,39 +482,137 @@ function _occupation_densities(m::ExplorerModel, sector::AbstractString, states)
             ro = ro)
 end
 
-# the orbital menu, labelled by each orbital's occupation in the selection, and set to
-# the most occupied orbital
-function _follow_orbitals!(e::Explorer)
-    menu = e.state[:orbital_menu]
-    ro = get(e.model.res.extra, "render/orbitals", nothing)
-    ro === nothing && return
+# ── the 3-D window ───────────────────────────────────────────────────────────
+
+const _MODES3D = ["densities", "natural orbitals", "constituents", "orbital"]
+
+# the amplitude tier, read once
+_amps(m::ExplorerModel) = _has_amplitudes(m.res) ?
+    get!(() -> _val(m.res.extra["render/orbitals"].amplitudes), m.cache, :amplitudes) : nothing
+
+# a level's natural orbitals (its density matrix averaged over its states), cached
+_level_nos(m::ExplorerModel, x) =
+    get!(() -> natural_orbitals(m.res, x.sector, collect(x.states); amplitudes = _amps(m)),
+         m.cache, (:natural_orbitals, x.sector, collect(x.states)))
+
+# an XX state's exciton pairs (A, B, weight), heaviest first; nothing without the X sector
+function _cells(m::ExplorerModel, sector, i)
+    get!(m.cache, (:cells, sector, i)) do
+        s = m.res.sectors[sector]
+        x = _exciton_sector(m.res, s)
+        x === nothing ? nothing : _pair_cells(m.res, s, x, i)
+    end
+end
+
+# What the 3-D window's pick menu offers in the current mode: (labels, items, default).
+# densities: the focused state or the level's average; natural orbitals: all, or one
+# group; constituents: the focused XX state's exciton pairs; orbital: every orbital,
+# with its occupation in the focused state, the most occupied by default.
+function _pick_options(e::Explorer)
     m = e.model
     x = m.nodes[m.selection[]]
     s = m.res.sectors[x.sector]
-    n = _occupations(m, x.sector, [m.focus[]])
-    occ = zeros(length(ro.energies))
-    if n !== nothing
-        for (k, st) in enumerate(s.estates)
-            occ[st.orb] = n.e[k]
+    mode = e.state[:mode3d][]
+    none = (["—"], Any[nothing], 1)
+    if mode == "orbital"
+        ro = get(m.res.extra, "render/orbitals", nothing)
+        ro === nothing && return none
+        n = _occupations(m, x.sector, focus_states(m))
+        occ = zeros(length(ro.energies))
+        if n !== nothing
+            foreach(((k, st),) -> occ[st.orb] = n.e[k], enumerate(s.estates))
+            foreach(((k, st),) -> occ[st.orb] = n.h[k], enumerate(s.hstates))
         end
-        for (k, st) in enumerate(s.hstates)
-            occ[st.orb] = n.h[k]
+        # one entry per Kramers pair (E1, H2, …), with the pair's occupation
+        prs = _orbital_pairs(m.res)
+        pocc = [sum(occ[p.members]) for p in prs]
+        opts = [@sprintf("%s  %.4f eV%s%s", p.name, ro.energies[first(p.members)],
+                         isempty(p.label) ? "" : "  " * p.label,
+                         pocc[j] > 5e-3 ? @sprintf("   n %.2f", pocc[j]) : "")
+                for (j, p) in enumerate(prs)]
+        keep = get(e.state, :pick_mode, "") == "orbital" ? clamp(e.state[:pick][], 1, length(opts)) : 1
+        return opts, Any[first(p.members) for p in prs], any(>(5e-3), pocc) ? argmax(pocc) : keep
+    elseif mode == "natural orbitals"
+        av = availability(m, x.id)
+        (av.vectors === true && av.amplitudes === true) || return none
+        no = _level_nos(m, x)
+        opts, items = ["all, most occupied first"], Any[nothing]
+        for (kind, v) in ((:e, no.e), (:h, no.h)), g in eachindex(v)
+            push!(opts, _no_name(kind, g, v[g]))
+            push!(items, (kind, g))
         end
+        return opts, items, 1
+    elseif mode == "constituents"
+        (s.sector == (2, 2) && m.focus[] <= s.nkept) || return none
+        cells = _cells(m, x.sector, m.focus[])
+        cells === nothing && return none
+        xs = _exciton_sector(m.res, s).name
+        # the pairs that hold weight, and the clicked one whatever it holds
+        c = get(e.state, :cell, nothing)
+        shown = [x for (j, x) in enumerate(cells) if j == 1 || x[3] > 1e-3 || (x[1], x[2]) == c]
+        opts = [@sprintf("%s%d · %s%d   %.3f", xs, a, xs, b, w) for (a, b, w) in shown]
+        items = Any[(a, b) for (a, b, _) in shown]
+        return opts, items, c === nothing ? 1 : something(findfirst(==(c), items), 1)
     end
-    opts = [@sprintf("%d %s %.4f eV%s", k, ro.kind[k] === :e ? "e" : "h", ro.energies[k],
-                     occ[k] > 5e-3 ? @sprintf("   n %.2f", occ[k]) : "")
-            for k in eachindex(ro.energies)]
-    best = any(>(5e-3), occ) ? argmax(occ) : e.state[:orbital][]
+    return ["focused state", "level average"], Any[:state, :level], 1
+end
+
+function _follow_pick!(e::Explorer)
+    opts, items, k = _pick_options(e)
+    menu = e.state[:pick_menu]
     e.state[:following] = true
     menu.options[] = opts
-    menu.i_selected[] = best
+    menu.i_selected[] = k
     e.state[:following] = false
-    e.state[:orbital][] = best
+    e.state[:pick_items] = items
+    e.state[:pick_mode] = e.state[:mode3d][]
+    e.state[:pick][] = k
     return nothing
 end
 
-# the 3-D window: the selection's stored densities (else its occupation densities), or
-# an orbital (by default the selection's most occupied)
+# densities on a grid, drawn with a title and a footnote
+function _draw_density_data!(host, res, ttl, d, foot, frac, geom)
+    gl = GridLayout(host[1, 1])
+    ax = _axis3_titled(gl, ttl)
+    geom && _geometry!(ax, _render_geometry(res, d.coords), d.coords)
+    _density_legend!(gl[3, 1], _density_pair!(ax, d.e, d.h, d.coords, frac))
+    Label(gl[4, 1], foot; fontsize = 10, color = _MUTED, tellwidth = false, word_wrap = true)
+    return (; axis = ax)
+end
+
+function _draw_densities_mode!(e::Explorer, host, x, s, item, frac, geom)
+    m = e.model
+    i = m.focus[]
+    av = availability(m, x.id)
+    if item === :level && length(x.states) > 1
+        (av.vectors === true && av.amplitudes === true) || return (_note(host[1, 1],
+            "the level's average needs its vectors and the orbital amplitudes: " *
+            string(av.vectors === true ? av.amplitudes : av.vectors)); nothing)
+        d, _ = _state_densities(m.res, s, collect(x.states); amplitudes = _amps(m))
+        return _draw_density_data!(host, m.res,
+            @sprintf("%s%d: states %d:%d averaged", x.sector, x.level, first(x.states), last(x.states)),
+            d, "the level's density, from its CI vectors and the orbital amplitudes: it does " *
+               "not depend on the basis within the level", frac, geom)
+    end
+    if haskey(s.densities, i) || (_has_amplitudes(m.res) && i <= s.nkept)
+        return draw_densities!(host[1, 1], m.res, x.sector, i; fraction = frac, geometry = geom,
+                               amplitudes = haskey(s.densities, i) ? nothing : _amps(m))
+    end
+    od = _occupation_densities(m, x.sector, [i])
+    if od !== nothing && (od.e !== nothing || od.h !== nothing)
+        one_carrier = sum(x.charge) == 1
+        return _draw_density_data!(host, m.res, _state_title(s, i) * "   (from occupations)", od,
+            one_carrier ? "one carrier: Σₖ nₖ|ψₖ|² is its density" :
+            "Σₖ nₖ|ψₖ|² over the orbitals, nₖ from the CI vector: it lacks the interference " *
+            "between configurations. Exact: " * string(av.densities), frac, geom)
+    end
+    _note(host[1, 1], "nothing to draw for $(node_name(m, x.id)): " * string(av.densities))
+    return nothing
+end
+
+# The 3-D window, in its mode: the focused state's densities (stored, else from the
+# amplitudes, else from occupations) or its level's average; the level's natural
+# orbitals; the focused biexciton's exciton pair; or an orbital.
 function _draw_3d!(e::Explorer)
     host = e.state[:host3d]
     old = get(e.state, :axis3d, nothing)
@@ -512,50 +621,75 @@ function _draw_3d!(e::Explorer)
     end
     _clear!(host)
     e.state[:axis3d] = nothing
+    get(e.state, :pick_mode, "") == e.state[:mode3d][] || _follow_pick!(e)
     m = e.model
     x = m.nodes[m.selection[]]
     s = m.res.sectors[x.sector]
     frac = e.state[:fraction][]
     geom = e.state[:geometry][]
-    p = if e.state[:mode3d][] == "densities"
-        i = m.focus[]
-        stored = haskey(s.densities, i)
-        od = stored ? nothing : _occupation_densities(m, x.sector, [i])
-        if stored
-            draw_densities!(host[1, 1], m.res, x.sector, i; fraction = frac, geometry = geom)
-        elseif od !== nothing && (od.e !== nothing || od.h !== nothing)
-            gl = GridLayout(host[1, 1])
-            ax = _axis3_titled(gl, _state_title(s, i) * "   (from occupations)")
-            geom && od.ro.geometry !== nothing && _geometry!(ax, Float64.(_val(od.ro.geometry)), od.coords)
-            _density_legend!(gl[3, 1], _density_pair!(ax, od.e, od.h, od.coords, frac))
-            one_carrier = sum(x.charge) == 1
-            Label(gl[4, 1], one_carrier ? "one carrier: Σₖ nₖ|ψₖ|² is its density" :
-                  "Σₖ nₖ|ψₖ|² over the orbitals, nₖ from the CI vector: it lacks the interference " *
-                  "between configurations. Exact: " * string(availability(m, x.id).densities);
-                  fontsize = 10, color = _MUTED, tellwidth = false, word_wrap = true)
-            (; axis = ax)
+    items = e.state[:pick_items]
+    item = items[clamp(e.state[:pick][], 1, length(items))]
+    mode = e.state[:mode3d][]
+    p = try
+        if mode == "densities"
+            _draw_densities_mode!(e, host, x, s, item, frac, geom)
+        elseif mode == "natural orbitals"
+            av = availability(m, x.id)
+            if av.vectors !== true || av.amplitudes !== true
+                _note(host[1, 1], "natural orbitals of $(node_name(m, x.id)): " *
+                                  string(av.vectors === true ? av.amplitudes : av.vectors))
+                nothing
+            else
+                draw_natural_orbitals!(host[1, 1], m.res, x.sector, collect(x.states); pick = item,
+                                       no = _level_nos(m, x), amplitudes = _amps(m),
+                                       fraction = frac, geometry = geom)
+            end
+        elseif mode == "constituents"
+            if s.sector != (2, 2)
+                _note(host[1, 1], "constituents are the exciton pairs of a biexciton: select an " *
+                                  "XX level (or click a cell of its make-up in the composition lens)")
+                nothing
+            else
+                draw_constituents!(host[1, 1], m.res, x.sector, m.focus[]; cell = item,
+                                   amplitudes = _amps(m), fraction = frac, geometry = geom)
+            end
         else
-            _note(host[1, 1], "nothing to draw for $(node_name(m, x.id)): " *
-                              string(availability(m, x.id).densities) *
-                              (availability(m, x.id).vectors === true ? "" :
-                               "; or " * string(availability(m, x.id).vectors)))
-            nothing
+            av = availability(m, x.id).orbitals
+            av === true ? draw_orbital!(host[1, 1], m.res, item; fraction = frac, geometry = geom) :
+                          (_note(host[1, 1], "no render tier: " * string(av)); nothing)
         end
-    else
-        k = e.state[:orbital][]
-        av = availability(m, x.id).orbitals
-        av === true ? draw_orbital!(host[1, 1], m.res, k; fraction = frac, geometry = geom) :
-                      (_note(host[1, 1], "no render tier: " * string(av)); nothing)
+    catch err
+        err isa ArgumentError || rethrow()
+        _clear!(host)
+        _note(host[1, 1], sprint(showerror, err))
+        nothing
     end
     if p !== nothing
         e.state[:axis3d] = p.axis
         cam = get(e.state, :camera, nothing)
-        if cam !== nothing
+        if cam !== nothing && p.axis !== nothing
             p.axis.azimuth[] = cam[1]
             p.axis.elevation[] = cam[2]
         end
     end
     return nothing
+end
+
+"A click on a cell of a biexciton's make-up (in excitons): the 3-D window shows that pair."
+function _click_cell!(e::Explorer, xy)
+    p = get(e.state, :config, nothing)
+    (p === nothing || get(p, :kind, nothing) !== :excitons) && return nothing
+    a, b = round(Int, xy[1]), round(Int, xy[2])
+    L = length(p.levels)
+    (1 <= a <= L && 1 <= b <= L) || return nothing
+    c = minmax(a, b)
+    e.state[:cell] = c
+    e.state[:mode3d][] = "constituents"
+    menu = e.state[:mode_menu]
+    menu.selection[] == "constituents" || (menu.i_selected[] = findfirst(==("constituents"), _MODES3D))
+    _follow_pick!(e)
+    _draw_3d!(e)
+    return c
 end
 
 # ── interaction ─────────────────────────────────────────────────────────────
@@ -655,7 +789,10 @@ The explorer of a results archive: two windows that follow one selected level.
 - The **fine-structure** strip shows every state of the selected level (the sector's
   degenerate block) in µeV, one column per irrep, with the symmetric fit when the
   archive's effective-Hamiltonian product covers it. Click a state, or press Tab, to
-  focus it: the card, the make-up and the 3-D window then show that state.
+  focus it: the card, the make-up and the 3-D window then show that state. In a sector
+  with an odd number of carriers (e, h, the trions) a Kramers pair is one line and one
+  focus: its two states agree in everything spin-blind. An even sector's states (X, XX)
+  are each drawn, being distinct (dark, bright).
 - The **detail** panel: the level's card (energy, label, closure, lifetime, and what
   the archive lacks with the spec key that adds it), then per lens its emission and
   absorption lines (click one to go to its other end), its labels in every subgroup
@@ -665,12 +802,20 @@ The explorer of a results archive: two windows that follow one selected level.
   goes back, 1–3 switch the lens. The
   **find** menu is searchable ("XX 3", "Γ6"); ◀ ▶ walk the history.
 
-**The 3-D window** follows the selection too. `densities` draws its stored densities, or,
-where none are stored, Σₖ nₖ|ψₖ|² from its CI vector's orbital occupations and the render
-tier (exact for one carrier; for more it lacks the interference between configurations,
-and says so). `orbital` lists every orbital with its occupation in the selection and
-shows the most occupied, or the one picked. The enclosed fraction and the dot's
-outline are adjustable.
+**The 3-D window** follows the focused state. Its **show** menu picks the mode, and the
+menu beside it what of the selection that mode draws:
+- `densities`: the focused state's reduced densities, stored, else contracted from its
+  CI vector and the orbital amplitudes (`orbitals: {amplitudes: true}`: exact, for any
+  kept state), else Σₖ nₖ|ψₖ|² from its occupations and the render tier (exact for one
+  carrier; for more it lacks the interference between configurations, and says so). Or
+  the level's average, which does not depend on the basis within it.
+- `natural orbitals`: the level's, from its density matrix averaged over its states,
+  grouped by occupation (Kramers pairs, an irrep's partners); all of them, or one group.
+- `constituents`: for a biexciton, the two exciton levels of one of its exciton pairs,
+  heaviest first. Clicking a cell of its make-up (the composition lens) picks that pair.
+- `orbital`: every Kramers pair of orbitals (E1, H2, …), with its occupation in the
+  focused state, the most occupied shown first.
+The enclosed fraction and the dot's outline are adjustable.
 
 Under GLMakie both windows open (`display = false` builds them without showing). Under
 CairoMakie they build, respond to `select!(e.model, id)` and save, but take no input.
@@ -709,12 +854,8 @@ function explore(res::CICalcResults; lens::AbstractString = "recombination",
     fig3d = Figure(size = size3d)
     bar3 = GridLayout(fig3d[1, 1]; tellwidth = false)
     Label(bar3[1, 1], "show"; halign = :right)
-    mode_menu = Menu(bar3[1, 2]; options = ["densities", "orbital"], default = "densities", width = 110)
-    ro = get(res.extra, "render/orbitals", nothing)
-    orbs = ro === nothing ? ["—"] :
-           [@sprintf("%d %s %.4f eV", k, ro.kind[k] === :e ? "e" : "h", ro.energies[k])
-            for k in eachindex(ro.energies)]
-    orb_menu = Menu(bar3[1, 3]; options = orbs, default = first(orbs), width = 170)
+    mode_menu = Menu(bar3[1, 2]; options = _MODES3D, default = "densities", width = 140)
+    pick_menu = Menu(bar3[1, 3]; options = ["—"], default = "—", width = 230)
     Label(bar3[1, 4], "fraction"; halign = :right)
     frac = Slider(bar3[1, 5]; range = 0.1:0.05:0.9, startvalue = 0.5, width = 120)
     geo_toggle = Toggle(bar3[1, 6]; active = true)
@@ -725,19 +866,20 @@ function explore(res::CICalcResults; lens::AbstractString = "recombination",
                  Ref(NamedTuple[]),
                  Dict{Symbol,Any}(:detail => detail, :host3d => host3d, :fraction => frac.value,
                                   :geometry => geo_toggle.active, :mode3d => Observable("densities"),
-                                  :orbital => Observable(1), :orbital_menu => orb_menu,
+                                  :pick => Observable(1), :pick_items => Any[nothing],
+                                  :pick_menu => pick_menu, :mode_menu => mode_menu, :cell => nothing,
                                   :following => false, :menus => (lens_menu, group_menu, find_menu)))
-    redraw() = (_draw_map!(e); _draw_fine!(e); _draw_detail!(e); _follow_orbitals!(e); _draw_3d!(e);
-                sel_label.text = node_name(m, m.selection[]))
+    redraw() = (e.state[:cell] = nothing; _draw_map!(e); _draw_fine!(e); _draw_detail!(e);
+                _follow_pick!(e); _draw_3d!(e); sel_label.text = node_name(m, m.selection[]))
     _draw_map!(e; keep_limits = false)
     _draw_fine!(e)
     _draw_detail!(e)
-    _follow_orbitals!(e)
+    _follow_pick!(e)
     _draw_3d!(e)
 
     on(_ -> redraw(), m.selection)
     on(m.focus) do _                    # another state of the same line: no new map
-        _draw_fine!(e); _draw_detail!(e); _follow_orbitals!(e); _draw_3d!(e)
+        _draw_fine!(e); _draw_detail!(e); _follow_pick!(e); _draw_3d!(e)
     end
     on(e.lens) do l
         lens_menu.selection[] == l || (lens_menu.i_selected[] = findfirst(==(l), _LENSES))
@@ -756,11 +898,18 @@ function explore(res::CICalcResults; lens::AbstractString = "recombination",
     end
     on(_ -> back!(m), back_b.clicks)
     on(_ -> forward!(m), fwd_b.clicks)
-    on(s -> s === nothing || (e.state[:mode3d][] = s; _draw_3d!(e)), mode_menu.selection)
-    on(orb_menu.selection) do s
-        (s === nothing || s == "—" || e.state[:following]) && return
-        e.state[:orbital][] = parse(Int, first(split(s)))
-        e.state[:mode3d][] == "orbital" && _draw_3d!(e)
+    on(mode_menu.selection) do s
+        (s === nothing || s == e.state[:mode3d][]) && return
+        e.state[:mode3d][] = s
+        _follow_pick!(e); _draw_3d!(e)
+    end
+    on(pick_menu.selection) do s
+        (s === nothing || e.state[:following]) && return
+        k = findfirst(==(s), pick_menu.options[])
+        (k === nothing || k == e.state[:pick][]) && return
+        e.state[:pick][] = k
+        e.state[:mode3d][] == "constituents" && (e.state[:cell] = e.state[:pick_items][k])
+        _draw_3d!(e)
     end
     on(_ -> _draw_3d!(e), Makie.Observables.throttle(0.2, frac.value))
     on(_ -> _draw_3d!(e), geo_toggle.active)
@@ -772,6 +921,8 @@ function explore(res::CICalcResults; lens::AbstractString = "recombination",
             _click_map!(e, mouseposition(map_ax.scene))
         elseif is_mouseinside(fine_ax)
             _click_fine!(e, mouseposition(fine_ax.scene))
+        elseif (p = get(e.state, :config, nothing); p !== nothing && is_mouseinside(p.axis))
+            _click_cell!(e, mouseposition(p.axis.scene))
         else
             for w in (Symbol("lines out"), Symbol("lines in"))
                 d = get(e.state, w, nothing)

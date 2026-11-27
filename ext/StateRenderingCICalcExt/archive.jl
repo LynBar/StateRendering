@@ -234,7 +234,11 @@ Every figure the archive supports, written under `out`, one folder per kind:
                 configurations_1 the ground state's make-up: a biexciton in excitons, a
                                  trion as electrons ⊗ holes
                 configurations_1_species  a biexciton as electron pair ⊗ hole pair
-                densities_<i>    each state whose densities were stored
+                densities_<i>    each state whose densities were stored, and with the
+                                 amplitude tier the ground state's (densities_1)
+                natural_orbitals_1  the ground level's natural orbitals (amplitude tier)
+                constituents_1   a biexciton ground state's heaviest exciton pair
+                                 (amplitude tier, with the X sector's vectors)
     cascades/   one figure per stored cascade
 
 A figure the archive cannot support is skipped, and the reason is printed. Returns the
@@ -293,6 +297,13 @@ function save_figures(res::CICalcResults; out::AbstractString = "figures",
                 () -> plot_configurations(res, n, 1; basis = :species))
         for i in sort!(collect(keys(s.densities)))
             one("sectors/$n/densities_$i", () -> plot_densities(res, n, i))
+        end
+        # the amplitude tier: any kept state's densities and natural orbitals
+        if _has_amplitudes(res) && s.nkept >= 1 && sum(s.sector) > 0
+            haskey(s.densities, 1) || one("sectors/$n/densities_1", () -> plot_densities(res, n, 1))
+            last(s.levels[1]) <= s.nkept &&
+                one("sectors/$n/natural_orbitals_1", () -> plot_natural_orbitals(res, n, collect(s.levels[1])))
+            s.sector == (2, 2) && one("sectors/$n/constituents_1", () -> plot_constituents(res, n, 1))
         end
     end
     for n in sort!(collect(keys(res.cascades)))

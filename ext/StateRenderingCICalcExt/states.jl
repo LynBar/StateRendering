@@ -44,6 +44,27 @@ function _orbital_label(res::CICalcResults, o::Integer)
     return b === nothing || isempty(lb.labels) ? "" : lb.labels[b]
 end
 
+# The orbitals' Kramers pairs, E1, E2, … and H1, H2, … in energy order (the orbital levels
+# of `species_weights` when every level is a pair): `(; name, members, label, kind)`, with
+# `members` archive orbital indices. A spinless or unpaired orbital is a pair of one.
+function _orbital_pairs(res::CICalcResults)
+    o = res.orbitals !== nothing ? res.orbitals : get(res.extra, "render/orbitals", nothing)
+    o === nothing && return NamedTuple[]
+    out = NamedTuple[]
+    for (kind, pre) in ((:e, "E"), (:h, "H"))
+        idx = findall(==(kind), o.kind)
+        for (k, p) in enumerate(kramers_pairs(o.energies[idx]))
+            mem = idx[p]
+            push!(out, (name = pre * string(k), members = mem, label = _orbital_label(res, first(mem)),
+                        kind))
+        end
+    end
+    return out
+end
+
+# the pair holding archive orbital `k`
+_pair_of_orbital(res, k) = something(findfirst(p -> k in p.members, _orbital_pairs(res)), 0)
+
 # the geometry χ(r) of the render tier, if it is on the same coarse grid
 function _render_geometry(res::CICalcResults, coords)
     ro = get(res.extra, "render/orbitals", nothing)
@@ -65,33 +86,56 @@ end
 The electron and hole of state `i` of a stored sector, as isosurfaces of their
 **reduced one-body densities**, in one axis. Both surfaces enclose `fraction` of their
 particle's charge, so they are directly comparable: the offset between them is the
-state's static dipole. The densities are a heavy product: list the state in the
-sector's `densities:` in the run spec. With the render tier stored on the same grid,
-the dot's geometry is drawn faintly behind them.
+state's static dipole. The densities are the sector's stored ones (`densities:` in the
+run spec, at the full grid), or, for any state whose CI vector is kept, contracted from
+that vector and the orbital amplitudes (`orbitals: {amplitudes: true}`, on the render
+grid). With the render tier stored on the same grid, the dot's geometry is drawn
+faintly behind them.
 """
 plot_densities(res::CICalcResults, name::AbstractString, i::Integer; size = nothing, kwargs...) =
     _single(pos -> draw_densities!(pos, res, name, i; kwargs...), size)
 
 """
-    draw_densities!(pos, res, name, i; fraction = 0.5, geometry = true, title)
-        -> (; layout, axis, size)
+    draw_densities!(pos, res, name, i; fraction = 0.5, geometry = true, title,
+                    amplitudes = nothing) -> (; layout, axis, size, source)
 
-[`plot_densities`](@ref) drawn into a grid position.
+[`plot_densities`](@ref) drawn into a grid position. `source` is `:stored` or
+`:amplitudes`; `amplitudes` passes the amplitude array already read.
 """
 function draw_densities!(pos, res::CICalcResults, name::AbstractString, i::Integer;
-                         fraction::Real = 0.5, geometry::Bool = true, title = nothing)
+                         fraction::Real = 0.5, geometry::Bool = true, title = nothing,
+                         amplitudes = nothing)
     s = _sector_state(res, name, i)
-    haskey(s.densities, i) || throw(ArgumentError(
-        "no densities are stored for $(s.name) state $i" *
-        (isempty(s.densities) ? "" : " (stored: $(join(sort!(collect(keys(s.densities))), ", ")))") *
-        ". Add it to `densities:` of sector $(s.name) in the run spec."))
-    d = s.densities[i]
+    d, source = _state_densities(res, s, i; amplitudes)
     xyz = d.coords
     gl = GridLayout(pos)
     ax = _axis3_titled(gl, title === nothing ? _state_title(s, i) : title)
     geometry && _geometry!(ax, _render_geometry(res, xyz), xyz)
-    _density_legend!(gl[3, 1], _density_pair!(ax, _val(d.e), _val(d.h), xyz, fraction))
-    return (; layout = gl, axis = ax, size = (620, 560))
+    _density_legend!(gl[3, 1], _density_pair!(ax, d.e, d.h, xyz, fraction))
+    source === :amplitudes &&
+        Label(gl[4, 1], "from the CI vector and the orbital amplitudes (render grid, stride " *
+                        string(res.extra["render/orbitals"].stride) * ")";
+              fontsize = 10, color = _MUTED, tellwidth = false)
+    return (; layout = gl, axis = ax, size = (620, 560), source)
+end
+
+# a state's (or a level's) reduced densities: stored, else from its vectors and the
+# amplitude tier; the hint names both spec keys when neither is there
+function _state_densities(res::CICalcResults, s::StoredSector, states; amplitudes = nothing)
+    S = collect(Int, states isa Integer ? (states:states) : states)
+    if length(S) == 1 && haskey(s.densities, only(S))
+        d = s.densities[only(S)]
+        return (e = _val(d.e), h = _val(d.h), coords = d.coords), :stored
+    end
+    if _has_amplitudes(res) && last(S) <= s.nkept
+        return reduced_densities(res, s.name, S; amplitudes), :amplitudes
+    end
+    throw(ArgumentError(
+        "no densities for $(s.name) state(s) $(join(S, ", "))" *
+        (isempty(s.densities) ? "" : " (stored: $(join(sort!(collect(keys(s.densities))), ", ")))") *
+        ". Add `orbitals: {amplitudes: true}` to the run spec's `compute` (every state whose " *
+        "vector is kept" * (last(S) <= s.nkept ? "" : "; raise `keep:` of sector $(s.name) to $(last(S))") *
+        "), or list the state in `densities:` of sector $(s.name)."))
 end
 
 # a state's electron and hole densities as isosurfaces, each enclosing `fraction` of
@@ -130,8 +174,10 @@ end
 
 What state `i` of a stored sector is made of.
 
-- **An exciton (1,1):** a heatmap of `|C|²` over (electron, hole) orbital pairs, the
-  axes labelled by the orbitals' irreps.
+- **An exciton (1,1):** a heatmap of `|C|²` over the Kramers pairs of orbitals (E1, H1,
+  …; `kramers_pairs`), the axes labelled by their irreps. A cell is the same for every
+  state of its manifold Eₖ ⊗ Hₗ; its inset, how the cell splits over the 2 × 2 partners,
+  is what tells dark from bright. `pairs = false` draws single orbitals instead.
 - **A biexciton (2,2):** written in terms of excitons. The heatmap is over pairs of
   the lowest `nlevels` exciton levels (A, B), and each cell is the weight of that
   exciton pair in the state (`exciton_pair_weights`).
@@ -160,13 +206,13 @@ plot_configurations(res::CICalcResults, name::AbstractString, i::Integer; size =
 
 """
     draw_configurations!(pos, res, name, i; basis = :auto, top = 16, nlevels = 8, title,
-                         colormap) -> (; layout, axis, size)
+                         colormap, pairs = true) -> (; layout, axis, size, kind)
 
 [`plot_configurations`](@ref) drawn into a grid position.
 """
 function draw_configurations!(pos, res::CICalcResults, name::AbstractString, i::Integer;
                               basis::Symbol = :auto, top::Integer = 16, nlevels::Integer = 8,
-                              title = nothing, colormap = _CONFIG_CMAP)
+                              title = nothing, colormap = _CONFIG_CMAP, pairs::Bool = true)
     s = _sector_state(res, name, i)
     i <= s.nkept || throw(ArgumentError(
         "the CI vectors of $(s.name) are stored for its lowest $(s.nkept) states; " *
@@ -197,7 +243,14 @@ function draw_configurations!(pos, res::CICalcResults, name::AbstractString, i::
     w = abs2.(v)
     gl = GridLayout(pos)
     ttl = title === nothing ? _state_title(s, i) : title
-    if s.sector == (1, 1)
+    if s.sector == (1, 1) && pairs
+        W = zeros(ne, nh)
+        for (k, b) in enumerate(s.basis)
+            es, hs = occ(b)
+            W[only(es), only(hs)] += w[k]
+        end
+        return _draw_exciton_pairs!(gl, res, s, W, ttl, colormap)
+    elseif s.sector == (1, 1)
         W = zeros(ne, nh)
         for (k, b) in enumerate(s.basis)
             es, hs = occ(b)
@@ -227,7 +280,48 @@ function draw_configurations!(pos, res::CICalcResults, name::AbstractString, i::
                                  length(w), sum(w[ord])); fontsize = 10, color = _MUTED,
               tellwidth = false)
     end
-    return (; layout = gl, axis = ax, size = (600, 460))
+    return (; layout = gl, axis = ax, size = (600, 460),
+            kind = s.sector == (1, 1) ? :orbitals : :determinants)
+end
+
+# An exciton over Kramers pairs of orbitals: the cell (Eₖ, Hₗ) holds the weight of the
+# electron in pair Eₖ and the hole in Hₗ, and an inset shows how that weight splits over
+# the 2 × 2 partners. The cell is the same for every state of the manifold Eₖ ⊗ Hₗ (dark
+# and bright alike); the inset is what tells them apart.
+function _draw_exciton_pairs!(gl, res, s, W, ttl, colormap)
+    Pe = kramers_pairs([st.energy for st in s.estates])
+    Ph = kramers_pairs([st.energy for st in s.hstates])
+    Wp = [sum(W[a, b]) for a in Pe, b in Ph]
+    ne, nh = size(Wp)
+    lab(st, p, pre, k) = (l = _orbital_label(res, st[first(p)].orb);
+                          string(pre, k, length(p) == 2 ? "" : "*") * (isempty(l) ? "" : "\n" * l))
+    ax = Axis(gl[1, 1]; title = ttl, xlabel = "hole (Kramers pair)", ylabel = "electron (Kramers pair)",
+              xticks = (1:nh, [lab(s.hstates, Ph[b], "H", b) for b in 1:nh]),
+              yticks = (1:ne, [lab(s.estates, Pe[a], "E", a) for a in 1:ne]),
+              aspect = DataAspect())
+    top = max(maximum(Wp), 1e-12)
+    hm = heatmap!(ax, 1:nh, 1:ne, permutedims(Wp); colormap, colorrange = (0, top))
+    cs = Makie.to_colormap(colormap)
+    pick(v) = cs[clamp(round(Int, 1 + v * (length(cs) - 1)), 1, length(cs))]
+    for a in 1:ne, b in 1:nh
+        Wp[a, b] < 1e-3 && continue
+        dark = Wp[a, b] > 0.5top
+        text!(ax, b, a + 0.2; text = @sprintf("%.2f", Wp[a, b]), align = (:center, :center),
+              fontsize = 10, color = dark ? :white : :black)
+        (length(Pe[a]) == 2 && length(Ph[b]) == 2 && Wp[a, b] > 0.02) || continue
+        sub = W[Pe[a], Ph[b]] ./ Wp[a, b]
+        for r in 1:2, c in 1:2                         # rows: electron partners, top first
+            poly!(ax, Rect2f(b - 0.2 + (c - 1) * 0.2, a - 0.02 - r * 0.2, 0.2, 0.2);
+                  color = pick(sub[r, c]), strokecolor = dark ? :white : _MUTED, strokewidth = 0.8)
+        end
+    end
+    Colorbar(gl[1, 2], hm; label = "|C|² over the pair (inset: split over its partners)")
+    Label(gl[2, 1:2], "cells: Kramers pairs of orbitals (* unpaired); the inset splits a cell over " *
+                      "the electron's (rows) and the hole's (columns) partners, on the same colours " *
+                      "as a share of the cell";
+          fontsize = 10, color = _MUTED, tellwidth = false, word_wrap = true)
+    return (; layout = gl, axis = ax, size = (max(560, 110nh + 260), max(460, 100ne + 260)),
+            kind = :pairs)
 end
 
 function _draw_by_species!(pos, res, s, i; title, colormap, cut = 1e-3)
@@ -267,7 +361,8 @@ function _draw_by_species!(pos, res, s, i; title, colormap, cut = 1e-3)
                                 s.name, string(findfirst(r -> i in r, s.levels)), first(l), last(l), sum(W),
                                 λ(w.λe), λ(w.λh), w.product.ranks..., w.product.weight);
           fontsize = 10, color = _MUTED, tellwidth = false)
-    return (; layout = gl, axis = ax, size = (max(600, 110nc + 260), max(460, 60nr + 280)))
+    return (; layout = gl, axis = ax, size = (max(600, 110nc + 260), max(460, 60nr + 280)),
+            kind = :species)
 end
 
 function _draw_in_excitons!(pos, res, s, x, i; nlevels, title, colormap)
@@ -293,7 +388,156 @@ function _draw_in_excitons!(pos, res, s, x, i; nlevels, title, colormap)
     Colorbar(gl[1, 2], hm; label = "weight of the exciton pair (A, B)")
     Label(gl[2, 1:2], @sprintf("¼ Σ |⟨XX|Xₐ† X_b†|0⟩|² over the two levels; the lowest %d levels hold %.3f of the state",
                                 L, w.captured[1]); fontsize = 10, color = _MUTED, tellwidth = false)
-    return (; layout = gl, axis = ax, size = (max(560, 70L + 300), max(520, 60L + 300)))
+    return (; layout = gl, axis = ax, size = (max(560, 70L + 300), max(520, 60L + 300)),
+            kind = :excitons, levels = w.levels, W, exciton_sector = x.name)
+end
+
+# ── natural orbitals ─────────────────────────────────────────────────────────
+
+# a group of natural orbitals: its occupation per spin-orbital, and how many Kramers pairs
+_no_mult(m) = m == 1 ? "" : m == 2 ? ", a Kramers pair" : iseven(m) ? ", $(m ÷ 2) Kramers pairs" : " (×$m)"
+_no_name(kind, g, grp) = @sprintf("%s NO %d   n = %.3f%s", kind === :e ? "e" : "h", g,
+                                  sum(grp.n) / length(grp.n), _no_mult(length(grp.n)))
+
+"""
+    plot_natural_orbitals(res::CICalcResults, name, states; groups = 3, fraction = 0.5,
+                          geometry = true) -> Figure
+
+The natural orbitals of a stored state, or of a level (pass its states: the density
+matrix is averaged over them), from its CI vectors and the orbital amplitudes
+(`orbitals: {amplitudes: true}`). The `groups` most occupied of each species, electrons
+on top and holes below. A group is a set of natural orbitals with one occupation n (a
+Kramers pair, an irrep's partners); its summed density is drawn, the isosurface
+enclosing `fraction` of it. One configuration has occupations of 1 and 0; correlation
+spreads them, and the occupations say over how many orbitals each species is spread.
+"""
+plot_natural_orbitals(res::CICalcResults, name::AbstractString, states; size = nothing, kwargs...) =
+    _single(pos -> draw_natural_orbitals!(pos, res, name, states; kwargs...), size)
+
+"""
+    draw_natural_orbitals!(pos, res, name, states; groups = 3, pick = nothing,
+                           fraction = 0.5, geometry = true, amplitudes = nothing, no = nothing)
+        -> (; layout, axis, size, no)
+
+[`plot_natural_orbitals`](@ref) drawn into a grid position. `pick = (:e, g)` or `(:h, g)`
+draws that one group alone; `no` passes `natural_orbitals(res, name, states)` already
+computed.
+"""
+function draw_natural_orbitals!(pos, res::CICalcResults, name::AbstractString, states;
+                                groups::Integer = 3, pick = nothing, fraction::Real = 0.5,
+                                geometry::Bool = true, amplitudes = nothing, no = nothing)
+    S = collect(Int, states isa Integer ? (states:states) : states)
+    s = _sector_state(res, name, first(S))
+    _has_amplitudes(res) || _missing_product("orbital amplitudes (the amplitude tier)",
+        "Add `orbitals: {amplitudes: true}` to the run spec's `compute`.")
+    no = no === nothing ? natural_orbitals(res, name, S; amplitudes) : no
+    χ = geometry ? _render_geometry(res, no.coords) : nothing
+    which = length(S) == 1 ? @sprintf("%s%d", s.name, only(S)) :
+            @sprintf("%s states %d:%d (the level's average)", s.name, first(S), last(S))
+    gl = GridLayout(pos)
+    function panel(p, kind, g)
+        grp = getproperty(no, kind)[g]
+        sub = GridLayout(p)
+        ax = _axis3_titled(sub, _no_name(kind, g, grp))
+        χ === nothing || _geometry!(ax, χ, no.coords)
+        ρ = grp.density
+        m = isosurface_mesh(ρ, no.coords..., isolevel(ρ, fraction))
+        m === nothing || mesh!(ax, m; color = (kind_color(kind === :e ? :electron : :hole), 0.5),
+                               transparency = true)
+        return ax
+    end
+    occ(v) = join((@sprintf("%.3f", sum(g.n) / length(g.n)) *
+                   (iseven(length(g.n)) ? (length(g.n) == 2 ? "" : "×$(length(g.n) ÷ 2)") : "×$(length(g.n))/2")
+                   for g in v[1:min(4, end)]), " ")
+    foot = "occupation per spin-orbital, one entry per Kramers pair (×k: k pairs that agree within " *
+           "1e-3, mixed by the breaking): electrons " * occ(no.e) * " | holes " * occ(no.h)
+    if pick !== nothing
+        kind, g = pick
+        1 <= g <= length(getproperty(no, kind)) || throw(ArgumentError(
+            "no natural-orbital group $g for the $(kind === :e ? "electrons" : "holes")"))
+        Label(gl[1, 1], which; fontsize = 13, color = _INK, tellwidth = false)
+        ax = panel(gl[2, 1], kind, g)
+        Label(gl[3, 1], foot; fontsize = 10, color = _MUTED, tellwidth = false, word_wrap = true)
+        return (; layout = gl, axis = ax, size = (620, 600), no)
+    end
+    ne, nh = min(groups, length(no.e)), min(groups, length(no.h))
+    nc = max(ne, nh, 1)
+    Label(gl[1, 1:nc], which * ": natural orbitals"; fontsize = 15, font = :bold, tellwidth = false)
+    first_ax = nothing
+    for (row, kind, n) in ((2, :e, ne), (3, :h, nh)), g in 1:n
+        ax = panel(gl[row, g], kind, g)
+        first_ax === nothing && (first_ax = ax)
+    end
+    Label(gl[4, 1:nc], foot; fontsize = 10, color = _MUTED, tellwidth = false, word_wrap = true)
+    return (; layout = gl, axis = first_ax, size = (320nc + 40, 700), no)
+end
+
+# ── constituents: the two excitons of a biexciton's exciton pair ─────────────
+
+"""
+    plot_constituents(res::CICalcResults, name, i; cell = nothing, nlevels = 8,
+                      fraction = 0.5, geometry = true) -> Figure
+
+A biexciton state written in excitons (`exciton_pair_weights`), shown by its pair: the
+densities of the two exciton levels A and B of `cell = (A, B)`, by default the pair
+holding the most weight, each averaged over its level. Needs the X sector's vectors
+and the orbital amplitudes. The two excitons are the state's description, not its
+density: the state's own densities are `plot_densities`.
+"""
+plot_constituents(res::CICalcResults, name::AbstractString, i::Integer; size = nothing, kwargs...) =
+    _single(pos -> draw_constituents!(pos, res, name, i; kwargs...), size)
+
+"""
+    draw_constituents!(pos, res, name, i; cell = nothing, nlevels = 8, fraction = 0.5,
+                       geometry = true, amplitudes = nothing) -> (; layout, axis, size, cell, cells)
+
+[`plot_constituents`](@ref) drawn into a grid position. `cells` lists every pair
+`(A, B, weight)`, heaviest first.
+"""
+function draw_constituents!(pos, res::CICalcResults, name::AbstractString, i::Integer;
+                            cell = nothing, nlevels::Integer = 8, fraction::Real = 0.5,
+                            geometry::Bool = true, amplitudes = nothing)
+    s = _sector_state(res, name, i)
+    s.sector == (2, 2) || throw(ArgumentError(
+        "constituents are the exciton pairs of a biexciton (2,2); $(s.name) is $(s.sector)"))
+    i <= s.nkept || throw(ArgumentError(
+        "the CI vectors of $(s.name) are stored for its lowest $(s.nkept) states; raise `keep:`"))
+    x = _exciton_sector(res, s)
+    x === nothing && throw(ArgumentError(
+        "writing $(s.name) in excitons needs the exciton sector with its vectors: add " *
+        "`X: {keep: all}` to the run spec's sectors"))
+    cells = _pair_cells(res, s, x, i; nlevels)
+    A, B = cell === nothing ? (cells[1][1], cells[1][2]) : minmax(cell...)
+    k = findfirst(c -> (c[1], c[2]) == (A, B), cells)
+    k === nothing && throw(ArgumentError("($A, $B) is not a pair of the lowest $nlevels exciton levels"))
+    wt = cells[k][3]
+    lv = x.levels
+    gl = GridLayout(pos)
+    Label(gl[1, 1:2], @sprintf("%s  ⊃  %s%d · %s%d   (weight %.3f)", _state_title(s, i), x.name, A,
+                               x.name, B, wt); fontsize = 15, font = :bold, tellwidth = false)
+    first_ax = nothing
+    for (c, L) in enumerate(A == B ? (A,) : (A, B))
+        d, _ = _state_densities(res, x, collect(lv[L]); amplitudes)
+        sub = GridLayout(gl[2, c])
+        lab = isempty(x.labels) || isempty(x.labels[L]) ? "" : "   " * x.labels[L]
+        ax = _axis3_titled(sub, @sprintf("%s%d%s%s", x.name, L, lab, A == B ? "  (twice)" : ""))
+        geometry && _geometry!(ax, _render_geometry(res, d.coords), d.coords)
+        _density_legend!(sub[3, 1], _density_pair!(ax, d.e, d.h, d.coords, fraction))
+        first_ax === nothing && (first_ax = ax)
+    end
+    Label(gl[3, 1:2], "each exciton level's densities, averaged over its states; the weight is " *
+                      "¼ Σ |⟨XX|Xₐ† X_b†|0⟩|² over the two levels";
+          fontsize = 10, color = _MUTED, tellwidth = false)
+    return (; layout = gl, axis = first_ax, size = (A == B ? 620 : 1100, 600), cell = (A, B), cells)
+end
+
+# (A, B, weight) of an XX state over pairs of the lowest exciton levels, heaviest first
+function _pair_cells(res, s::StoredSector, x::StoredSector, i; nlevels = 8)
+    w = exciton_pair_weights(SectorSolution(s), SectorSolution(x); states = [i],
+                             xlevels = x.levels, nlevels)
+    L = length(w.levels)
+    cells = [(a, b, w.W[a, b, 1]) for a in 1:L for b in a:L]
+    return sort!(cells; by = c -> -c[3])
 end
 
 """
@@ -303,32 +547,42 @@ Single-particle orbital `k` from the render tier: the isosurface enclosing `frac
 of |ψ|², one surface per band group (S, HH, LH, SO or S, X, Y, Z) holding at least 2 %
 of the weight, coloured by group, or the total alone with `bands = false`. The render
 tier is a heavy product: add `orbitals:` to the run spec.
+
+An orbital is drawn as its Kramers pair (`pair = true`, named E1, H2, … in energy
+order): time reversal leaves |ψ|² and its band groups unchanged, so the two partners
+are one picture, and the pair's mean is drawn.
 """
 plot_orbital(res::CICalcResults, k::Integer; size = nothing, kwargs...) =
     _single(pos -> draw_orbital!(pos, res, k; kwargs...), size)
 
 """
-    draw_orbital!(pos, res, k; fraction = 0.5, bands = true, geometry = true, title)
-        -> (; layout, axis, size)
+    draw_orbital!(pos, res, k; fraction = 0.5, bands = true, geometry = true, pair = true,
+                  title) -> (; layout, axis, size)
 
 [`plot_orbital`](@ref) drawn into a grid position.
 """
 function draw_orbital!(pos, res::CICalcResults, k::Integer; fraction::Real = 0.5,
-                       bands::Bool = true, geometry::Bool = true, title = nothing)
+                       bands::Bool = true, geometry::Bool = true, pair::Bool = true,
+                       title = nothing)
     ro = get(res.extra, "render/orbitals", nothing)
     ro === nothing && _missing_product("render tier (orbitals on a coarse grid)",
                                        "Add `orbitals: {stride: 2}` to the run spec's `compute`.")
     n = length(ro.energies)
     1 <= k <= n || throw(ArgumentError("orbital $k is out of range 1:$n"))
     lab = _orbital_label(res, k)
+    j = pair ? _pair_of_orbital(res, k) : 0
+    pr = j == 0 ? nothing : _orbital_pairs(res)[j]
+    mem = pr === nothing ? [k] : pr.members
     gl = GridLayout(pos)
-    ttl = title === nothing ?
+    ttl = title !== nothing ? title : pr !== nothing && length(mem) == 2 ?
+        @sprintf("%s (orbitals %d, %d: a Kramers pair)   %.4f eV%s", pr.name, mem...,
+                 ro.energies[k], isempty(lab) ? "" : "   " * lab) :
         @sprintf("orbital %d (%s)   %.4f eV%s", k, ro.kind[k] === :e ? "electron" : "hole",
-                 ro.energies[k], isempty(lab) ? "" : "   " * lab) : title
+                 ro.energies[k], isempty(lab) ? "" : "   " * lab)
     ax = _axis3_titled(gl, ttl)
     geometry && ro.geometry !== nothing && _geometry!(ax, Float64.(_val(ro.geometry)), ro.coords)
     if bands && ro.by_group !== nothing
-        G = _val(ro.by_group)[:, :, :, :, k]
+        G = sum(_val(ro.by_group)[:, :, :, :, q] for q in mem) ./ length(mem)
         tot = sum(G)
         cols = component_palette(ro.groups)
         els, names = Any[], String[]
@@ -345,7 +599,7 @@ function draw_orbital!(pos, res::CICalcResults, k::Integer; fraction::Real = 0.5
         isempty(els) || Legend(gl[3, 1], els, names; orientation = :horizontal,
                                framevisible = false, tellheight = true)
     else
-        ρ = Float64.(_val(ro.total)[:, :, :, k])
+        ρ = Float64.(sum(_val(ro.total)[:, :, :, q] for q in mem) ./ length(mem))
         m = isosurface_mesh(ρ, ro.coords..., isolevel(ρ, fraction))
         m === nothing || mesh!(ax, m; color = (kind_color(ro.kind[k] === :e ? :electron : :hole), 0.5),
                                transparency = true)
